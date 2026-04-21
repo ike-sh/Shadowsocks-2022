@@ -28,7 +28,6 @@ Alpine 系统可先补齐基础依赖：
 
 ```bash
 apk update && apk add bash curl
-bash /root/install.sh
 ```
 
 ### 一键安装
