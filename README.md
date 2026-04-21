@@ -26,13 +26,13 @@
 请使用 root 用户执行：
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/ike666888/Shadowsocks-2022/refs/heads/main/install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/ike-sh/Shadowsocks-2022/refs/heads/main/install.sh)
 ```
 
 Alpine 可先补齐基础依赖：
 
 ```bash
-if [ -f /etc/alpine-release ]; then apk update && apk add bash curl; fi && bash <(curl -sL https://raw.githubusercontent.com/ike666888/Shadowsocks-2022/refs/heads/main/install.sh)
+if [ -f /etc/alpine-release ]; then apk update && apk add bash curl; fi && bash <(curl -sL https://raw.githubusercontent.com/ike-sh/Shadowsocks-2022/refs/heads/main/install.sh)
 ```
 
 ## 🛠️ 功能菜单
