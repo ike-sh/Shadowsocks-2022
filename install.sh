@@ -17,13 +17,12 @@ SHORTCUT_PATH="/usr/local/bin/ike"
 LEGACY_SHORTCUT_PATH="/usr/local/bin/sb"
 INSTALLER_DIR="/usr/local/share/ike"
 INSTALLER_PATH="${INSTALLER_DIR}/install.sh"
-RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/Shadowsocks-2022/refs/heads/main/install.sh"
+RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/Shadowsocks-2022/main/install.sh"
 XRAY_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 
 SS_TAG="ss2022-in"
 VLESS_TAG="vless-enc-in"
 SOCKS_TAG="socks-in"
-VLESS_FLOW="xtls-rprx-vision"
 
 IPV6_PREFERRED="false"
 LINK_VIEW_MODE="dual"
@@ -240,6 +239,18 @@ init_state() {
         mv "$STATE_FILE" "${STATE_FILE}.broken.$(date +%Y%m%d%H%M%S)"
         echo '{}' > "$STATE_FILE"
     fi
+
+    local tmp
+    tmp="$(mktemp)"
+    jq '
+      if (.vless_encryption? | type) == "object" then
+        .vless_encryption |= del(.flow)
+      else
+        .
+      end
+    ' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+    rm -f "$tmp"
+
     ensure_config_security
 }
 
@@ -410,7 +421,7 @@ install_or_update_xray() {
     init_state
 
     if [[ -x "$BIN_PATH" && "$force" != "true" ]]; then
-        create_service
+        create_service || return 1
         return 0
     fi
 
@@ -864,7 +875,6 @@ state_set_vless() {
        --arg enc_method "$VLESS_ENC_METHOD" \
        --arg client_rtt "$VLESS_CLIENT_RTT" \
        --arg server_ticket "$VLESS_SERVER_TICKET" \
-       --arg flow "$VLESS_FLOW" \
        --arg port "$VLESS_PORT" '
         .vless_encryption = {
           "tag": $tag,
@@ -875,7 +885,6 @@ state_set_vless() {
           "enc_method": $enc_method,
           "client_rtt": $client_rtt,
           "server_ticket": $server_ticket,
-          "flow": $flow,
           "port": ($port|tonumber)
         }
        ' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
@@ -892,7 +901,6 @@ install_vless_encryption() {
        --arg listen "$VLESS_LISTEN" \
        --arg port "$VLESS_PORT" \
        --arg uuid "$VLESS_UUID" \
-       --arg flow "$VLESS_FLOW" \
        --arg decryption "$VLESS_DECRYPTION" '
         .inbounds = ((.inbounds // []) | map(select(.tag != $tag))) |
         .inbounds += [{
@@ -904,7 +912,6 @@ install_vless_encryption() {
             "clients": [
               {
                 "id": $uuid,
-                "flow": $flow,
                 "email": "vless@xray"
               }
             ],
@@ -966,8 +973,8 @@ install_socks5() {
 }
 
 get_public_addresses() {
-    PUBLIC_IPV4="$(curl -s4 --max-time 5 ifconfig.me 2>/dev/null || true)"
-    PUBLIC_IPV6="$(curl -s6 --max-time 5 ifconfig.me 2>/dev/null || true)"
+    PUBLIC_IPV4="$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null || true)"
+    PUBLIC_IPV6="$(curl -s6 --max-time 5 https://ifconfig.me 2>/dev/null || true)"
 
     if [[ -z "$PUBLIC_IPV6" ]]; then
         PUBLIC_IPV6="$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | head -n 1 | cut -d'/' -f1)"
@@ -1034,12 +1041,11 @@ view_config() {
         [[ -n "$IPV6_HOST" ]] && echo -e "IPv6链接: ss://${user_info}@${IPV6_HOST}:${ssp}#SS2022-IPv6"
     fi
 
-    local vless_in vp vu vf venc vmode vmethod vrtt vticket venc_uri vf_uri
+    local vless_in vp vu venc vmode vmethod vrtt vticket venc_uri
     vless_in="$(jq -c --arg tag "$VLESS_TAG" '.inbounds[]? | select(.tag == $tag)' "$CONFIG_FILE" 2>/dev/null)"
     if [[ -n "$vless_in" ]]; then
         vp="$(echo "$vless_in" | jq -r '.port')"
         vu="$(echo "$vless_in" | jq -r '.settings.clients[0].id')"
-        vf="$(echo "$vless_in" | jq -r '.settings.clients[0].flow // empty')"
         venc="$(jq -r '.vless_encryption.encryption // empty' "$STATE_FILE" 2>/dev/null)"
         vmode="$(jq -r '.vless_encryption.mode // "basic"' "$STATE_FILE" 2>/dev/null)"
         vmethod="$(jq -r '.vless_encryption.enc_method // "native"' "$STATE_FILE" 2>/dev/null)"
@@ -1049,7 +1055,6 @@ view_config() {
         echo -e "\n${YELLOW}--- VLESS Encryption ---${PLAIN}"
         echo -e "端口: ${vp}"
         echo -e "UUID: ${vu}"
-        echo -e "Flow: ${vf:-无}"
         echo -e "模式: ${vmode}"
         echo -e "外观混淆: ${vmethod}"
         echo -e "客户端握手: ${vrtt}"
@@ -1059,9 +1064,8 @@ view_config() {
         else
             echo -e "客户端 encryption: ${venc}"
             venc_uri="$(url_encode "$venc")"
-            vf_uri="$(url_encode "$vf")"
-            [[ -n "$IPV4_HOST" ]] && echo -e "IPv4链接: vless://${vu}@${IPV4_HOST}:${vp}?type=tcp&security=none&encryption=${venc_uri}&flow=${vf_uri}#VLESS-ENC-IPv4"
-            [[ -n "$IPV6_HOST" ]] && echo -e "IPv6链接: vless://${vu}@${IPV6_HOST}:${vp}?type=tcp&security=none&encryption=${venc_uri}&flow=${vf_uri}#VLESS-ENC-IPv6"
+            [[ -n "$IPV4_HOST" ]] && echo -e "IPv4链接: vless://${vu}@${IPV4_HOST}:${vp}?type=tcp&security=none&encryption=${venc_uri}#VLESS-ENC-IPv4"
+            [[ -n "$IPV6_HOST" ]] && echo -e "IPv6链接: vless://${vu}@${IPV6_HOST}:${vp}?type=tcp&security=none&encryption=${venc_uri}#VLESS-ENC-IPv6"
         fi
     fi
 
@@ -1149,7 +1153,8 @@ reset_secrets() {
                --arg uuid "$VLESS_UUID" \
                --arg decryption "$VLESS_DECRYPTION" '
                 (.inbounds[] | select(.tag == $tag).settings.clients[0].id) = $uuid |
-                (.inbounds[] | select(.tag == $tag).settings.decryption) = $decryption
+                (.inbounds[] | select(.tag == $tag).settings.decryption) = $decryption |
+                del(.inbounds[] | select(.tag == $tag).settings.clients[0].flow)
                ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
             rm -f "$tmp"
             state_set_vless
@@ -1336,22 +1341,22 @@ show_menu() {
 
         case "$MENU_CHOICE" in
             1) update_xray_core ;;
-            2) prepare_system; configure_ss2022; install_ss2022 ;;
+            2) prepare_system && configure_ss2022 && install_ss2022 ;;
             3)
-                prepare_system
-                if check_ipv6_status; then
-                    IPV6_PREFERRED="true"
-                    configure_ss2022
-                    install_ss2022
-                else
-                    info "[IPv6] 请先在服务器开通 IPv6 后重试。"
-                fi
+                prepare_system && {
+                    if check_ipv6_status; then
+                        IPV6_PREFERRED="true"
+                        configure_ss2022 && install_ss2022
+                    else
+                        info "[IPv6] 请先在服务器开通 IPv6 后重试。"
+                    fi
+                }
                 ;;
-            4) prepare_system; configure_vless_encryption; install_vless_encryption ;;
-            5) prepare_system; install_socks5 ;;
+            4) prepare_system && configure_vless_encryption && install_vless_encryption ;;
+            5) prepare_system && install_socks5 ;;
             6) view_config ;;
             7) set_link_view_mode ;;
-            8) prepare_system; reset_secrets ;;
+            8) prepare_system && reset_secrets ;;
             9) uninstall ;;
             10) exit 0 ;;
             *) err "错误选项。" ;;
