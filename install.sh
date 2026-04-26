@@ -24,7 +24,6 @@ SS_TAG="ss2022-in"
 VLESS_TAG="vless-enc-in"
 SOCKS_TAG="socks-in"
 
-IPV6_PREFERRED="false"
 LINK_VIEW_MODE="dual"
 OS_TYPE=""
 INIT_SYSTEM=""
@@ -407,9 +406,20 @@ replace_xray_binary() {
 }
 
 apply_config() {
+    local context="${1:-}"
+
     ensure_config_security
-    validate_config_file || return 1
-    restart_service
+    [[ -n "$context" ]] && info "[${context}] 正在校验 Xray 配置..."
+    if ! validate_config_file; then
+        [[ -n "$context" ]] && err "[失败] [${context}] Xray 配置校验失败。"
+        return 1
+    fi
+
+    [[ -n "$context" ]] && info "[${context}] 正在重启服务..."
+    if ! restart_service; then
+        [[ -n "$context" ]] && err "[失败] [${context}] 服务重启失败。"
+        return 1
+    fi
 }
 
 install_or_update_xray() {
@@ -616,6 +626,8 @@ generate_ss2022_password() {
 }
 
 configure_ss2022() {
+    local listen_mode="${1:-ipv4}"
+
     echo -e "\n${YELLOW}[配置] Shadowsocks 2022 加密协议:${PLAIN}"
     echo -e "  1) 2022-blake3-aes-128-gcm ${GREEN}(推荐，兼容性好)${PLAIN}"
     echo "  2) 2022-blake3-aes-256-gcm"
@@ -629,23 +641,53 @@ configure_ss2022() {
         *) SS_METHOD="2022-blake3-aes-128-gcm" ;;
     esac
 
-    ask_port "SS2022 端口" "9000" SS_PORT
+    ask_port "SS2022 端口" "9000" SS_PORT || {
+        err "[失败] [SS2022] 端口配置失败。"
+        return 1
+    }
     SS_PASSWORD="$(generate_ss2022_password "$SS_METHOD")"
-    SS_LISTEN="0.0.0.0"
-    [[ "$IPV6_PREFERRED" == "true" ]] && SS_LISTEN="::"
+    if [[ -z "$SS_PASSWORD" ]]; then
+        err "[失败] [SS2022] 密码生成失败。"
+        return 1
+    fi
+
+    case "$listen_mode" in
+        ipv4) SS_LISTEN="0.0.0.0" ;;
+        ipv6) SS_LISTEN="::" ;;
+        *)
+            err "[失败] [SS2022] 未知监听模式: $listen_mode"
+            return 1
+            ;;
+    esac
+
+    info "[SS2022] 监听模式: ${listen_mode} (${SS_LISTEN})"
+    return 0
 }
 
 install_ss2022() {
-    install_or_update_xray || return 1
-    backup_config
+    info "[SS2022] 正在生成配置..."
+    if ! install_or_update_xray; then
+        err "[失败] [SS2022] Xray 安装/更新失败。"
+        return 1
+    fi
+
+    if ! backup_config; then
+        err "[失败] [SS2022] 配置备份失败。"
+        return 1
+    fi
 
     local tmp
-    tmp="$(mktemp)"
-    jq --arg tag "$SS_TAG" \
-       --arg listen "$SS_LISTEN" \
-       --arg port "$SS_PORT" \
-       --arg method "$SS_METHOD" \
-       --arg pass "$SS_PASSWORD" '
+    tmp="$(mktemp)" || {
+        err "[失败] [SS2022] 创建临时文件失败。"
+        return 1
+    }
+
+    info "[SS2022] 正在写入 config.json..."
+    if ! jq --arg tag "$SS_TAG" \
+        --arg listen "$SS_LISTEN" \
+        --arg port "$SS_PORT" \
+        --arg method "$SS_METHOD" \
+        --arg pass "$SS_PASSWORD" '
         .inbounds = ((.inbounds // []) | map(select(.tag != $tag))) |
         .inbounds += [{
           "tag": $tag,
@@ -659,10 +701,22 @@ install_ss2022() {
             "level": 0
           }
         }]
-       ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
-    rm -f "$tmp"
+       ' "$CONFIG_FILE" > "$tmp"; then
+        rm -f "$tmp"
+        err "[失败] [SS2022] jq 生成配置失败。"
+        return 1
+    fi
 
-    apply_config || return 1
+    if ! mv "$tmp" "$CONFIG_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [SS2022] 写入 $CONFIG_FILE 失败。"
+        return 1
+    fi
+
+    if ! apply_config "SS2022"; then
+        err "[失败] [SS2022] 应用配置失败。"
+        return 1
+    fi
     ok "[完成] SS2022 已写入 Xray 配置。"
     view_config
 }
@@ -1340,24 +1394,52 @@ show_menu() {
         read -r -p "请输入选项 [1-10]: " MENU_CHOICE || exit 0
 
         case "$MENU_CHOICE" in
-            1) update_xray_core ;;
-            2) prepare_system && configure_ss2022 && install_ss2022 ;;
+            1)
+                update_xray_core || err "[失败] Xray 核心安装/更新未完成，请查看上方错误信息。"
+                ;;
+            2)
+                if ! { prepare_system && configure_ss2022 "ipv4" && install_ss2022; }; then
+                    err "[失败] Shadowsocks 2022 安装未完成，请查看上方错误信息。"
+                fi
+                ;;
             3)
-                prepare_system && {
+                if ! prepare_system; then
+                    err "[失败] IPv6 + Shadowsocks 2022 安装未完成，请查看上方错误信息。"
+                else
                     if check_ipv6_status; then
-                        IPV6_PREFERRED="true"
-                        configure_ss2022 && install_ss2022
+                        if ! { configure_ss2022 "ipv6" && install_ss2022; }; then
+                            err "[失败] IPv6 + Shadowsocks 2022 安装未完成，请查看上方错误信息。"
+                        fi
                     else
                         info "[IPv6] 请先在服务器开通 IPv6 后重试。"
+                        err "[失败] IPv6 + Shadowsocks 2022 安装未完成。"
                     fi
-                }
+                fi
                 ;;
-            4) prepare_system && configure_vless_encryption && install_vless_encryption ;;
-            5) prepare_system && install_socks5 ;;
-            6) view_config ;;
-            7) set_link_view_mode ;;
-            8) prepare_system && reset_secrets ;;
-            9) uninstall ;;
+            4)
+                if ! { prepare_system && configure_vless_encryption && install_vless_encryption; }; then
+                    err "[失败] VLESS Encryption 安装未完成，请查看上方错误信息。"
+                fi
+                ;;
+            5)
+                if ! { prepare_system && install_socks5; }; then
+                    err "[失败] SOCKS5 安装未完成，请查看上方错误信息。"
+                fi
+                ;;
+            6)
+                view_config || err "[失败] 查看当前配置链接失败，请查看上方错误信息。"
+                ;;
+            7)
+                set_link_view_mode || err "[失败] 设置链接显示模式失败，请查看上方错误信息。"
+                ;;
+            8)
+                if ! { prepare_system && reset_secrets; }; then
+                    err "[失败] 重置密钥/密码未完成，请查看上方错误信息。"
+                fi
+                ;;
+            9)
+                uninstall || err "[失败] 卸载/清理未完成，请查看上方错误信息。"
+                ;;
             10) exit 0 ;;
             *) err "错误选项。" ;;
         esac
