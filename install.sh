@@ -17,7 +17,10 @@ SHORTCUT_PATH="/usr/local/bin/ike"
 LEGACY_SHORTCUT_PATH="/usr/local/bin/sb"
 INSTALLER_DIR="/usr/local/share/ike"
 INSTALLER_PATH="${INSTALLER_DIR}/install.sh"
-RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/Shadowsocks-2022/main/install.sh"
+SCRIPT_NAME="Xray-OneClick"
+SCRIPT_VERSION="0.1.0"
+REPO_URL="https://github.com/ike-sh/Xray-OneClick"
+RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/Xray-OneClick/main/install.sh"
 XRAY_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 
 SS_TAG="ss2022-in"
@@ -3437,12 +3440,74 @@ run_forward_command() {
     esac
 }
 
+show_help() {
+    cat <<'EOF'
+Xray-OneClick 命令帮助
+
+常用命令:
+  ike
+  ike view
+  ike view doctor
+  ike update
+  ike backup
+  ike cnblock
+  ike cnblock basic
+  ike cnblock enhanced
+  ike cnblock off
+  ike safety enhanced on
+  ike safety enhanced off
+  ike forward list
+  ike forward add
+  ike forward add safe
+  ike forward add relay
+  ike forward edit
+  ike forward enable
+  ike forward disable
+  ike forward del
+  ike forward test
+  ike forward export
+  ike forward import
+  ike version
+EOF
+}
+
+show_version() {
+    echo "${SCRIPT_NAME} ${SCRIPT_VERSION}"
+    echo "Repository: ${REPO_URL}"
+    if [[ -x "$BIN_PATH" ]]; then
+        echo
+        "$BIN_PATH" version 2>/dev/null | head -n 5 || echo "Xray: 版本信息读取失败"
+    else
+        echo "Xray: 未安装 (${BIN_PATH})"
+    fi
+}
+
 main() {
+    case "${1:-}" in
+        help | -h | --help)
+            show_help
+            return 0
+            ;;
+        version | --version)
+            show_version
+            return 0
+            ;;
+        "" | view | update | backup | cnblock | safety | forward) ;;
+        *)
+            err "[失败] 未知命令: $1"
+            echo "运行 ike help 查看可用命令。"
+            return 1
+            ;;
+    esac
+
     ensure_root
     check_os
     detect_arch
 
     case "${1:-}" in
+        "")
+            show_menu
+            ;;
         view)
             shift
             run_view_command "$@"
@@ -3461,9 +3526,6 @@ main() {
             ;;
         forward)
             run_forward_command "${2:-}" "${3:-}"
-            ;;
-        *)
-            show_menu
             ;;
     esac
 }

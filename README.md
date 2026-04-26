@@ -1,4 +1,4 @@
-# Xray 多协议一键安装脚本
+# Xray-OneClick
 
 > 基于 **Xray-core** 的菜单式个人服务器安装脚本，支持 **Shadowsocks 2022**、**VLESS Encryption** 和可选 **SOCKS5**。
 
@@ -55,7 +55,7 @@ bash /root/install.sh
 只有确认当前代码已经提交并推送到 GitHub `main` 分支后，才推荐使用线上安装命令：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/Shadowsocks-2022/main/install.sh -o install.sh && bash install.sh
+curl -fsSL https://raw.githubusercontent.com/ike-sh/Xray-OneClick/main/install.sh -o install.sh && bash install.sh
 ```
 
 ## 快捷命令
@@ -73,6 +73,8 @@ ike view
 ike view ipv4
 ike view ipv6
 ike view doctor
+ike help
+ike version
 ike update
 ike backup
 ike cnblock
@@ -170,6 +172,10 @@ shfmt -d -i 4 -ci install.sh
 git diff --check -- install.sh README.md
 bash tests/test_forward.sh
 ```
+
+## 发布前验收
+
+发布到 GitHub Release 或更新 `main` 分支前，建议在真实 Linux VPS 上按 [发布前 Smoke Test](docs/smoke-test.md) 完整验收一次。该清单覆盖基础安装、协议配置、无 `flow` 检查、中转/端口转发、安全规则和卸载流程。
 
 ## 支持协议
 

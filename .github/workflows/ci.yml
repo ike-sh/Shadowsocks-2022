@@ -21,9 +21,11 @@ jobs:
       - name: Static checks
         run: |
           bash -n install.sh
-          shellcheck install.sh
-          shfmt -d -i 4 -ci install.sh
+          shellcheck install.sh scripts/test.sh tests/test_forward.sh
+          shfmt -d -i 4 -ci install.sh scripts/test.sh tests/test_forward.sh
           git diff --check -- install.sh README.md
+          old_repo='ike-sh/Shadowsocks''-2022'
+          ! grep -R "$old_repo" install.sh README.md docs .github scripts tests
 
       - name: Forward unit tests
         run: |
