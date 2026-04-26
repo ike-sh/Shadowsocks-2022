@@ -23,6 +23,9 @@ XRAY_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 SS_TAG="ss2022-in"
 VLESS_TAG="vless-enc-in"
 SOCKS_TAG="socks-in"
+BLOCK_OUTBOUND_TAG="BLOCK"
+DEFAULT_SAFETY_BLOCK_PORTS="25,135,137,138,139,445,465,587"
+ENHANCED_SAFETY_BLOCK_PORTS="69,161,162,389,636,1900,5353,5355,11211"
 
 LINK_VIEW_MODE="dual"
 OS_TYPE=""
@@ -228,6 +231,7 @@ JSON
       .outbounds //= [{"tag":"direct","protocol":"freedom"}]
     ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
     rm -f "$tmp"
+    ensure_default_safety_blocks || return 1
     ensure_config_security
 }
 
@@ -242,20 +246,124 @@ init_state() {
     local tmp
     tmp="$(mktemp)"
     jq '
-      if (.vless_encryption? | type) == "object" then
+      (if (.vless_encryption? | type) == "object" then
         .vless_encryption |= del(.flow)
       else
         .
-      end
+      end) |
+      .meta = (.meta // {})
     ' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
     rm -f "$tmp"
 
     ensure_config_security
 }
 
+state_set_meta_action() {
+    local action="$1"
+    local timestamp tmp
+
+    [[ -n "$action" ]] || return 0
+    command -v jq >/dev/null 2>&1 || {
+        err "[失败] [状态] 缺少 jq，无法更新最近变更。"
+        return 1
+    }
+    init_state
+    timestamp="$(date '+%Y-%m-%d %H:%M:%S %z')"
+    tmp="$(mktemp)" || {
+        err "[失败] [状态] 创建临时文件失败。"
+        return 1
+    }
+
+    if ! jq --arg action "$action" --arg updated_at "$timestamp" '
+      .meta = ((.meta // {}) + {
+        "last_action": $action,
+        "last_updated_at": $updated_at
+      })
+    ' "$STATE_FILE" > "$tmp"; then
+        rm -f "$tmp"
+        err "[失败] [状态] 更新 installer-state.json 失败。"
+        return 1
+    fi
+
+    if ! mv "$tmp" "$STATE_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [状态] 写入 installer-state.json 失败。"
+        return 1
+    fi
+    ensure_config_security
+}
+
+state_meta_value() {
+    local key="$1"
+    local fallback="${2:-无}"
+
+    [[ -f "$STATE_FILE" ]] || {
+        printf '%s' "$fallback"
+        return 0
+    }
+    jq -r --arg key "$key" --arg fallback "$fallback" '.meta[$key] // $fallback' "$STATE_FILE" 2>/dev/null
+}
+
 backup_config() {
     [[ -f "$CONFIG_FILE" ]] || return 0
     cp -a "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+}
+
+restore_latest_config_backup() {
+    local latest_backup
+
+    latest_backup="$(ls -t "${CONFIG_FILE}.bak."* 2>/dev/null | head -n 1 || true)"
+    if [[ -z "$latest_backup" || ! -f "$latest_backup" ]]; then
+        err "[回滚] 未找到可恢复的配置备份: ${CONFIG_FILE}.bak.*"
+        return 1
+    fi
+
+    info "[回滚] 正在恢复最近备份: $latest_backup"
+    if ! cp -a "$latest_backup" "$CONFIG_FILE"; then
+        err "[回滚] 恢复配置文件失败。"
+        return 1
+    fi
+    ensure_config_security
+
+    if ! validate_config_file; then
+        err "[回滚] 恢复失败：备份配置校验未通过。"
+        return 1
+    fi
+
+    ok "[回滚] 恢复成功，备份配置校验通过。"
+}
+
+export_current_config_backup() {
+    local timestamp config_backup state_backup
+
+    [[ -f "$CONFIG_FILE" ]] || {
+        err "[失败] 未找到配置文件: $CONFIG_FILE"
+        return 1
+    }
+
+    timestamp="$(date +%Y%m%d%H%M%S)"
+    config_backup="/root/xray-config-backup-${timestamp}.json"
+    state_backup="/root/xray-state-backup-${timestamp}.json"
+
+    if ! cp -a "$CONFIG_FILE" "$config_backup"; then
+        err "[失败] 导出配置备份失败: $config_backup"
+        return 1
+    fi
+    chmod 600 "$config_backup" 2>/dev/null || true
+
+    ok "[备份] config.json: $config_backup"
+
+    if [[ -f "$STATE_FILE" ]]; then
+        state_set_meta_action "导出配置备份" || err "[状态] 记录备份动作失败，配置备份已继续导出。"
+        if ! cp -a "$STATE_FILE" "$state_backup"; then
+            err "[失败] 导出状态备份失败: $state_backup"
+            return 1
+        fi
+        chmod 600 "$state_backup" 2>/dev/null || true
+        ok "[备份] installer-state.json: $state_backup"
+    else
+        info "[备份] 未找到状态文件，已跳过: $STATE_FILE"
+    fi
 }
 
 validate_config_file() {
@@ -408,16 +516,39 @@ replace_xray_binary() {
 apply_config() {
     local context="${1:-}"
 
+    ensure_default_safety_blocks || return 1
     ensure_config_security
     [[ -n "$context" ]] && info "[${context}] 正在校验 Xray 配置..."
     if ! validate_config_file; then
         [[ -n "$context" ]] && err "[失败] [${context}] Xray 配置校验失败。"
+        err "[回滚] 已检测到配置应用失败，正在恢复最近备份。"
+        if restore_latest_config_backup; then
+            info "[回滚] 正在重启服务以加载恢复后的配置..."
+            if restart_service; then
+                ok "[回滚] 恢复成功，服务已重新加载最近备份。"
+            else
+                err "[回滚] 恢复后的配置校验通过，但服务重启失败。"
+            fi
+        else
+            err "[回滚] 恢复失败，请手动检查 $CONFIG_FILE 和 ${CONFIG_FILE}.bak.*。"
+        fi
         return 1
     fi
 
     [[ -n "$context" ]] && info "[${context}] 正在重启服务..."
     if ! restart_service; then
         [[ -n "$context" ]] && err "[失败] [${context}] 服务重启失败。"
+        err "[回滚] 已检测到配置应用失败，正在恢复最近备份。"
+        if restore_latest_config_backup; then
+            info "[回滚] 正在重启服务以加载恢复后的配置..."
+            if restart_service; then
+                ok "[回滚] 恢复成功，服务已重新加载最近备份。"
+            else
+                err "[回滚] 恢复后的配置校验通过，但服务重启仍失败。"
+            fi
+        else
+            err "[回滚] 恢复失败，请手动检查 $CONFIG_FILE 和 ${CONFIG_FILE}.bak.*。"
+        fi
         return 1
     fi
 }
@@ -427,8 +558,8 @@ install_or_update_xray() {
     local release_json latest_url version tmpdir zip_path xray_bin replacing_existing
 
     install_dependencies || return 1
-    init_config
-    init_state
+    init_config || return 1
+    init_state || return 1
 
     if [[ -x "$BIN_PATH" && "$force" != "true" ]]; then
         create_service || return 1
@@ -510,6 +641,8 @@ install_or_update_xray() {
     fi
 
     rm -rf "$tmpdir"
+
+    ensure_default_safety_blocks || return 1
 
     if ! create_service; then
         err "[服务] 创建或刷新服务文件失败。"
@@ -717,6 +850,7 @@ install_ss2022() {
         err "[失败] [SS2022] 应用配置失败。"
         return 1
     fi
+    state_set_meta_action "安装 SS2022" || err "[状态] 最近变更记录失败。"
     ok "[完成] SS2022 已写入 Xray 配置。"
     view_config
 }
@@ -985,6 +1119,7 @@ install_vless_encryption() {
 
     state_set_vless
     apply_config || return 1
+    state_set_meta_action "安装 VLESS Encryption" || err "[状态] 最近变更记录失败。"
     ok "[完成] VLESS Encryption 已写入 Xray 配置。"
     view_config
 }
@@ -1022,6 +1157,7 @@ install_socks5() {
     rm -f "$tmp"
 
     apply_config || return 1
+    state_set_meta_action "安装 SOCKS5" || err "[状态] 最近变更记录失败。"
     ok "[完成] SOCKS5 已写入 Xray 配置。"
     view_config
 }
@@ -1036,6 +1172,11 @@ get_public_addresses() {
     if [[ -z "$PUBLIC_IPV4" ]]; then
         PUBLIC_IPV4="$(hostname -I 2>/dev/null | awk '{print $1}')"
     fi
+}
+
+get_local_addresses() {
+    PUBLIC_IPV4="$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./{print; exit}')"
+    PUBLIC_IPV6="$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | head -n 1 | cut -d'/' -f1)"
 }
 
 host_candidates() {
@@ -1057,8 +1198,473 @@ host_candidates() {
     esac
 }
 
+default_private_block_mode() {
+    if [[ -f "$ASSET_DIR/geoip.dat" ]]; then
+        printf '%s' "geoip:private"
+    else
+        printf '%s' "CIDR fallback"
+    fi
+}
+
+default_private_block_mode_arg() {
+    if [[ -f "$ASSET_DIR/geoip.dat" ]]; then
+        printf '%s' "geoip"
+    else
+        printf '%s' "cidr"
+    fi
+}
+
+ensure_default_safety_blocks() {
+    local tmp
+    local private_mode
+
+    [[ -f "$CONFIG_FILE" ]] || return 0
+    command -v jq >/dev/null 2>&1 || {
+        err "[错误] 缺少 jq，无法写入默认安全屏蔽规则。"
+        return 1
+    }
+
+    private_mode="$(default_private_block_mode_arg)"
+    info "[安全] 默认私网屏蔽模式: $(default_private_block_mode)"
+
+    tmp="$(mktemp)" || {
+        err "[失败] [安全] 创建临时文件失败。"
+        return 1
+    }
+
+    if ! jq --arg block "$BLOCK_OUTBOUND_TAG" \
+        --arg ports "$DEFAULT_SAFETY_BLOCK_PORTS" \
+        --arg private_mode "$private_mode" '
+        def private_fallback_ips:
+          ["127.0.0.0/8","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","169.254.0.0/16","100.64.0.0/10","::1/128","fc00::/7","fe80::/10"];
+        def private_ips:
+          if $private_mode == "geoip" then ["geoip:private"] else private_fallback_ips end;
+        def private_rule:
+          {"type": "field", "ip": private_ips, "outboundTag": $block};
+        def default_safety_rule:
+          . == {"type": "field", "protocol": ["bittorrent"], "outboundTag": $block} or
+          . == {"type": "field", "ip": ["geoip:private"], "outboundTag": $block} or
+          . == {"type": "field", "ip": private_fallback_ips, "outboundTag": $block} or
+          . == {"type": "field", "port": $ports, "outboundTag": $block};
+
+        .outbounds = (.outbounds // []) |
+        if ((.outbounds | map(select(.tag == $block)) | length) > 0) then
+          .
+        else
+          .outbounds += [{"tag": $block, "protocol": "blackhole"}]
+        end |
+        .routing = (.routing // {}) |
+        .routing.rules = ([
+          {"type": "field", "protocol": ["bittorrent"], "outboundTag": $block},
+          private_rule,
+          {"type": "field", "port": $ports, "outboundTag": $block}
+        ] + ((.routing.rules // []) | map(select((default_safety_rule) | not))))
+      ' "$CONFIG_FILE" > "$tmp"; then
+        rm -f "$tmp"
+        err "[失败] [安全] 写入默认安全屏蔽规则失败。"
+        return 1
+    fi
+
+    if ! mv "$tmp" "$CONFIG_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [安全] 更新 $CONFIG_FILE 失败。"
+        return 1
+    fi
+}
+
+default_safety_block_enabled() {
+    [[ -f "$CONFIG_FILE" ]] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    jq -e --arg block "$BLOCK_OUTBOUND_TAG" \
+       --arg ports "$DEFAULT_SAFETY_BLOCK_PORTS" \
+       --arg private_mode "$(default_private_block_mode_arg)" '
+      def private_fallback_ips:
+        ["127.0.0.0/8","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","169.254.0.0/16","100.64.0.0/10","::1/128","fc00::/7","fe80::/10"];
+      def private_ips:
+        if $private_mode == "geoip" then ["geoip:private"] else private_fallback_ips end;
+      any(.routing.rules[]?; . == {"type": "field", "protocol": ["bittorrent"], "outboundTag": $block}) and
+      any(.routing.rules[]?; . == {"type": "field", "ip": private_ips, "outboundTag": $block}) and
+      any(.routing.rules[]?; . == {"type": "field", "port": $ports, "outboundTag": $block})
+    ' "$CONFIG_FILE" >/dev/null 2>&1
+}
+
+default_safety_block_status() {
+    if default_safety_block_enabled; then
+        printf '%s' "已启用"
+    else
+        printf '%s' "未启用"
+    fi
+}
+
+enhanced_safety_block_enabled() {
+    [[ -f "$CONFIG_FILE" ]] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    jq -e --arg block "$BLOCK_OUTBOUND_TAG" \
+       --arg ports "$ENHANCED_SAFETY_BLOCK_PORTS" '
+      .routing.rules[]? |
+      select(. == {"type": "field", "port": $ports, "outboundTag": $block})
+    ' "$CONFIG_FILE" >/dev/null 2>&1
+}
+
+enhanced_safety_block_status() {
+    if enhanced_safety_block_enabled; then
+        printf '%s' "已启用"
+    else
+        printf '%s' "未启用"
+    fi
+}
+
+set_enhanced_safety_block() {
+    local enable="$1"
+    local tmp action
+
+    init_config || return 1
+    backup_config || {
+        err "[失败] [安全] 配置备份失败。"
+        return 1
+    }
+
+    tmp="$(mktemp)" || {
+        err "[失败] [安全] 创建临时文件失败。"
+        return 1
+    }
+
+    if [[ "$enable" == "true" ]]; then
+        info "[安全] 正在开启增强安全屏蔽..."
+        if ! jq --arg block "$BLOCK_OUTBOUND_TAG" \
+            --arg ports "$ENHANCED_SAFETY_BLOCK_PORTS" '
+          def enhanced_safety_rule:
+            . == {"type": "field", "port": $ports, "outboundTag": $block};
+
+          .outbounds = (.outbounds // []) |
+          if ((.outbounds | map(select(.tag == $block)) | length) > 0) then
+            .
+          else
+            .outbounds += [{"tag": $block, "protocol": "blackhole"}]
+          end |
+          .routing = (.routing // {}) |
+          .routing.rules = ([
+            {"type": "field", "port": $ports, "outboundTag": $block}
+          ] + ((.routing.rules // []) | map(select((enhanced_safety_rule) | not))))
+        ' "$CONFIG_FILE" > "$tmp"; then
+            rm -f "$tmp"
+            err "[失败] [安全] 生成增强安全屏蔽规则失败。"
+            return 1
+        fi
+    else
+        info "[安全] 正在关闭增强安全屏蔽..."
+        if ! jq --arg block "$BLOCK_OUTBOUND_TAG" \
+            --arg ports "$ENHANCED_SAFETY_BLOCK_PORTS" '
+          def enhanced_safety_rule:
+            . == {"type": "field", "port": $ports, "outboundTag": $block};
+
+          .routing = (.routing // {}) |
+          .routing.rules = ((.routing.rules // []) | map(select((enhanced_safety_rule) | not)))
+        ' "$CONFIG_FILE" > "$tmp"; then
+            rm -f "$tmp"
+            err "[失败] [安全] 移除增强安全屏蔽规则失败。"
+            return 1
+        fi
+    fi
+
+    if ! mv "$tmp" "$CONFIG_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [安全] 写入 $CONFIG_FILE 失败。"
+        return 1
+    fi
+
+    if ! apply_config "安全"; then
+        err "[失败] [安全] 应用增强安全屏蔽设置失败。"
+        return 1
+    fi
+
+    action="关闭"
+    [[ "$enable" == "true" ]] && action="启用"
+    state_set_meta_action "增强安全屏蔽: ${action}" || err "[状态] 最近变更记录失败。"
+    ok "[完成] 增强安全屏蔽已${action}。"
+}
+
+configure_enhanced_safety_block() {
+    local current choice
+
+    install_or_update_xray || {
+        err "[失败] [安全] Xray 安装/更新失败，无法修改增强安全屏蔽。"
+        return 1
+    }
+
+    current="$(enhanced_safety_block_status)"
+    echo -e "\n${YELLOW}[安全] 增强安全屏蔽:${PLAIN} ${current}"
+
+    if enhanced_safety_block_enabled; then
+        echo " 1) 关闭增强安全屏蔽"
+        echo " 2) 保持开启"
+        read -r -p "选项 (默认: 2): " choice
+        case "${choice:-2}" in
+            1) set_enhanced_safety_block "false" ;;
+            2) info "[安全] 保持开启。" ;;
+            *) err "无效选项。"; return 1 ;;
+        esac
+    else
+        echo " 1) 开启增强安全屏蔽"
+        echo " 2) 保持关闭"
+        read -r -p "选项 (默认: 2): " choice
+        case "${choice:-2}" in
+            1) set_enhanced_safety_block "true" ;;
+            2) info "[安全] 保持关闭。" ;;
+            *) err "无效选项。"; return 1 ;;
+        esac
+    fi
+}
+
+china_direct_block_enabled() {
+    [[ "$(china_direct_block_status)" != "未启用" ]]
+}
+
+china_direct_block_status() {
+    local has_ip="false"
+    local has_domain="false"
+
+    [[ -f "$CONFIG_FILE" ]] || {
+        printf '%s' "未启用"
+        return 0
+    }
+    command -v jq >/dev/null 2>&1 || {
+        printf '%s' "未启用"
+        return 0
+    }
+
+    if jq -e --arg block "$BLOCK_OUTBOUND_TAG" '
+      any(.routing.rules[]?; . == {"type": "field", "ip": ["geoip:cn"], "outboundTag": $block})
+    ' "$CONFIG_FILE" >/dev/null 2>&1; then
+        has_ip="true"
+    fi
+
+    if jq -e --arg block "$BLOCK_OUTBOUND_TAG" '
+      any(.routing.rules[]?; . == {"type": "field", "domain": ["geosite:cn"], "outboundTag": $block})
+    ' "$CONFIG_FILE" >/dev/null 2>&1; then
+        has_domain="true"
+    fi
+
+    if [[ "$has_ip" == "true" && "$has_domain" == "true" ]]; then
+        printf '%s' "增强模式"
+    elif [[ "$has_ip" == "true" ]]; then
+        printf '%s' "基础模式"
+    else
+        printf '%s' "未启用"
+    fi
+}
+
+check_china_direct_block_assets() {
+    local mode="${1:-basic}"
+    local missing=()
+
+    [[ -f "$ASSET_DIR/geoip.dat" ]] || missing+=("$ASSET_DIR/geoip.dat")
+    if [[ "$mode" == "enhanced" ]]; then
+        [[ -f "$ASSET_DIR/geosite.dat" ]] || missing+=("$ASSET_DIR/geosite.dat")
+    fi
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        err "[错误] 缺少 Xray 路由资源: ${missing[*]}"
+        if [[ "$mode" == "enhanced" ]]; then
+            err "[提示] 增强模式需要 geoip.dat 和 geosite.dat；基础模式只需要 geoip.dat。"
+        else
+            err "[提示] 中国大陆直连屏蔽基础模式需要 geoip.dat。"
+        fi
+        err "[提示] 请先执行 1) 安装/更新 Xray 核心 或 ike update，确保路由资源存在。"
+        return 1
+    fi
+
+    return 0
+}
+
+set_china_direct_block() {
+    local mode="$1"
+    local tmp action
+
+    init_config || return 1
+
+    case "$mode" in
+        off|basic|enhanced) ;;
+        *)
+            err "[失败] [路由] 未知中国大陆直连屏蔽模式: $mode"
+            return 1
+            ;;
+    esac
+
+    if [[ "$mode" != "off" ]]; then
+        check_china_direct_block_assets "$mode" || return 1
+    fi
+
+    backup_config || {
+        err "[失败] [路由] 配置备份失败。"
+        return 1
+    }
+
+    tmp="$(mktemp)" || {
+        err "[失败] [路由] 创建临时文件失败。"
+        return 1
+    }
+
+    if [[ "$mode" == "basic" ]]; then
+        info "[路由] 正在开启中国大陆直连屏蔽基础模式..."
+        if ! jq --arg block "$BLOCK_OUTBOUND_TAG" '
+          def cn_block_rule:
+            . == {"type": "field", "ip": ["geoip:cn"], "outboundTag": $block} or
+            . == {"type": "field", "domain": ["geosite:cn"], "outboundTag": $block};
+
+          .outbounds = (.outbounds // []) |
+          if ((.outbounds | map(select(.tag == $block)) | length) > 0) then
+            .
+          else
+            .outbounds += [{"tag": $block, "protocol": "blackhole"}]
+          end |
+          .routing = (.routing // {}) |
+          .routing.rules = ([
+            {"type": "field", "ip": ["geoip:cn"], "outboundTag": $block}
+          ] + ((.routing.rules // []) | map(select((cn_block_rule) | not))))
+        ' "$CONFIG_FILE" > "$tmp"; then
+            rm -f "$tmp"
+            err "[失败] [路由] 生成中国大陆直连屏蔽规则失败。"
+            return 1
+        fi
+    elif [[ "$mode" == "enhanced" ]]; then
+        info "[路由] 正在开启中国大陆直连屏蔽增强模式..."
+        if ! jq --arg block "$BLOCK_OUTBOUND_TAG" '
+          def cn_block_rule:
+            . == {"type": "field", "ip": ["geoip:cn"], "outboundTag": $block} or
+            . == {"type": "field", "domain": ["geosite:cn"], "outboundTag": $block};
+
+          .outbounds = (.outbounds // []) |
+          if ((.outbounds | map(select(.tag == $block)) | length) > 0) then
+            .
+          else
+            .outbounds += [{"tag": $block, "protocol": "blackhole"}]
+          end |
+          .routing = (.routing // {}) |
+          .routing.rules = ([
+            {"type": "field", "ip": ["geoip:cn"], "outboundTag": $block},
+            {"type": "field", "domain": ["geosite:cn"], "outboundTag": $block}
+          ] + ((.routing.rules // []) | map(select((cn_block_rule) | not))))
+        ' "$CONFIG_FILE" > "$tmp"; then
+            rm -f "$tmp"
+            err "[失败] [路由] 生成中国大陆直连屏蔽规则失败。"
+            return 1
+        fi
+    else
+        info "[路由] 正在关闭中国大陆直连屏蔽..."
+        if ! jq --arg block "$BLOCK_OUTBOUND_TAG" '
+          def cn_block_rule:
+            . == {"type": "field", "ip": ["geoip:cn"], "outboundTag": $block} or
+            . == {"type": "field", "domain": ["geosite:cn"], "outboundTag": $block};
+
+          .routing = (.routing // {}) |
+          .routing.rules = ((.routing.rules // []) | map(select((cn_block_rule) | not)))
+        ' "$CONFIG_FILE" > "$tmp"; then
+            rm -f "$tmp"
+            err "[失败] [路由] 移除中国大陆直连屏蔽规则失败。"
+            return 1
+        fi
+    fi
+
+    if ! mv "$tmp" "$CONFIG_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [路由] 写入 $CONFIG_FILE 失败。"
+        return 1
+    fi
+
+    if ! apply_config "路由"; then
+        err "[失败] [路由] 应用中国大陆直连屏蔽设置失败。"
+        return 1
+    fi
+
+    case "$mode" in
+        basic) action="基础模式" ;;
+        enhanced) action="增强模式" ;;
+        *) action="关闭" ;;
+    esac
+    state_set_meta_action "中国大陆直连屏蔽: ${action}" || err "[状态] 最近变更记录失败。"
+    ok "[完成] 中国大陆直连屏蔽已设置为${action}。"
+}
+
+configure_china_direct_block() {
+    local current choice
+
+    install_or_update_xray || {
+        err "[失败] [路由] Xray 安装/更新失败，无法修改路由设置。"
+        return 1
+    }
+
+    current="$(china_direct_block_status)"
+    echo -e "\n${YELLOW}[路由] 中国大陆直连屏蔽:${PLAIN} ${current}"
+
+    echo " 1) 开启基础模式 (仅 geoip:cn IP)"
+    echo " 2) 开启增强模式 (geoip:cn IP + geosite:cn 域名)"
+    echo " 3) 关闭中国大陆直连屏蔽"
+    echo " 4) 保持当前状态"
+    read -r -p "选项 (默认: 4): " choice
+    case "${choice:-4}" in
+        1) set_china_direct_block "basic" ;;
+        2) set_china_direct_block "enhanced" ;;
+        3) set_china_direct_block "off" ;;
+        4) info "[路由] 保持当前状态。" ;;
+        *) err "无效选项。"; return 1 ;;
+    esac
+}
+
+resource_file_status() {
+    if [[ -f "$1" ]]; then
+        printf '%s' "存在"
+    else
+        printf '%s' "不存在"
+    fi
+}
+
+xray_config_test_status() {
+    local log_file
+
+    [[ -x "$BIN_PATH" ]] || {
+        printf '%s' "未检测到 xray"
+        return 0
+    }
+    [[ -f "$CONFIG_FILE" ]] || {
+        printf '%s' "失败"
+        return 0
+    }
+
+    log_file="$(mktemp)" || {
+        printf '%s' "失败"
+        return 0
+    }
+    if "$BIN_PATH" run -test -c "$CONFIG_FILE" >"$log_file" 2>&1; then
+        rm -f "$log_file"
+        printf '%s' "通过"
+    else
+        rm -f "$log_file"
+        printf '%s' "失败"
+    fi
+}
+
+xray_service_status() {
+    if [[ "$INIT_SYSTEM" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+            printf '%s' "运行中"
+        else
+            printf '%s' "未运行"
+        fi
+    elif [[ "$INIT_SYSTEM" == "openrc" ]] && command -v rc-service >/dev/null 2>&1; then
+        if rc-service "$SERVICE_NAME" status 2>/dev/null | grep -qiE 'started|running'; then
+            printf '%s' "运行中"
+        else
+            printf '%s' "未运行"
+        fi
+    else
+        printf '%s' "未检测到 systemd/openrc"
+    fi
+}
+
 view_config() {
     local mode="${1:-$LINK_VIEW_MODE}"
+    local detail="${2:-quick}"
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
         err "错误：未找到配置文件，请先安装协议。"
@@ -1071,13 +1677,36 @@ view_config() {
     fi
 
     init_state
-    get_public_addresses
+    if [[ "$detail" == "doctor" ]]; then
+        get_public_addresses
+    else
+        get_local_addresses
+    fi
     host_candidates "$mode"
 
     echo -e "\n${GREEN}========= 当前 Xray 配置信息 =========${PLAIN}"
+    if [[ "$detail" == "doctor" ]]; then
+        echo -e "查看模式: ${YELLOW}完整诊断${PLAIN}"
+    else
+        echo -e "查看模式: ${YELLOW}快速${PLAIN} (${GREEN}完整诊断: ike view doctor${PLAIN})"
+    fi
     echo -e "链接显示模式: ${YELLOW}${mode}${PLAIN}"
-    [[ -n "$PUBLIC_IPV4" ]] && echo -e "IPv4: ${PUBLIC_IPV4}"
-    [[ -n "$PUBLIC_IPV6" ]] && echo -e "IPv6: ${PUBLIC_IPV6}"
+    echo -e "最近变更: ${YELLOW}$(state_meta_value last_action)${PLAIN}"
+    echo -e "最近更新时间: ${YELLOW}$(state_meta_value last_updated_at)${PLAIN}"
+    echo -e "默认安全屏蔽: ${YELLOW}$(default_safety_block_status)${PLAIN}"
+    echo -e "默认私网规则: ${YELLOW}$(default_private_block_mode)${PLAIN}"
+    echo -e "增强安全屏蔽: ${YELLOW}$(enhanced_safety_block_status)${PLAIN}"
+    echo -e "中国大陆直连屏蔽: ${YELLOW}$(china_direct_block_status)${PLAIN}"
+    if [[ "$detail" == "doctor" ]]; then
+        echo -e "geoip.dat: ${YELLOW}$(resource_file_status "$ASSET_DIR/geoip.dat")${PLAIN}"
+        echo -e "geosite.dat: ${YELLOW}$(resource_file_status "$ASSET_DIR/geosite.dat")${PLAIN}"
+        echo -e "Xray 配置校验: ${YELLOW}$(xray_config_test_status)${PLAIN}"
+        echo -e "Xray 服务状态: ${YELLOW}$(xray_service_status)${PLAIN}"
+        [[ -n "$PUBLIC_IPV4" ]] && echo -e "公网 IPv4: ${PUBLIC_IPV4}"
+        [[ -n "$PUBLIC_IPV6" ]] && echo -e "公网 IPv6: ${PUBLIC_IPV6}"
+    elif [[ -z "$IPV4_HOST" && -z "$IPV6_HOST" ]]; then
+        info "[提示] 快速模式未检测到本机地址，可使用 ike view doctor 探测公网 IP。"
+    fi
 
     local ss_in ssp ssw ssm user_info
     ss_in="$(jq -c --arg tag "$SS_TAG" '.inbounds[]? | select(.tag == $tag)' "$CONFIG_FILE" 2>/dev/null)"
@@ -1234,6 +1863,7 @@ reset_secrets() {
 
     if [[ "$changed" == "true" ]]; then
         apply_config || return 1
+        state_set_meta_action "重置密钥/密码" || err "[状态] 最近变更记录失败。"
         view_config
     else
         info "[提示] 没有可更新的配置。"
@@ -1243,7 +1873,7 @@ reset_secrets() {
 remove_inbound() {
     local tag="$1"
     local tmp
-    init_config
+    init_config || return 1
     tmp="$(mktemp)"
     jq --arg tag "$tag" '.inbounds = ((.inbounds // []) | map(select(.tag != $tag)))' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
     rm -f "$tmp"
@@ -1382,7 +2012,10 @@ render_menu() {
     echo -e "${GREEN}7.${PLAIN} 设置链接显示模式 (IPv4/IPv6/双栈)"
     echo -e "${GREEN}8.${PLAIN} 重置密钥/密码（端口不变）"
     echo -e "${RED}9.${PLAIN} 卸载/清理"
-    echo -e "${GREEN}10.${PLAIN} 退出"
+    echo -e "${GREEN}10.${PLAIN} 开启/关闭中国大陆直连屏蔽"
+    echo -e "${GREEN}11.${PLAIN} 开启/关闭增强安全屏蔽"
+    echo -e "${GREEN}12.${PLAIN} 导出当前配置备份"
+    echo -e "${GREEN}13.${PLAIN} 退出"
     echo -e "----------------------------------------------"
 }
 
@@ -1391,7 +2024,7 @@ show_menu() {
 
     while true; do
         render_menu
-        read -r -p "请输入选项 [1-10]: " MENU_CHOICE || exit 0
+        read -r -p "请输入选项 [1-13]: " MENU_CHOICE || exit 0
 
         case "$MENU_CHOICE" in
             1)
@@ -1440,12 +2073,105 @@ show_menu() {
             9)
                 uninstall || err "[失败] 卸载/清理未完成，请查看上方错误信息。"
                 ;;
-            10) exit 0 ;;
+            10)
+                configure_china_direct_block || err "[失败] 中国大陆直连屏蔽设置未完成，请查看上方错误信息。"
+                ;;
+            11)
+                configure_enhanced_safety_block || err "[失败] 增强安全屏蔽设置未完成，请查看上方错误信息。"
+                ;;
+            12)
+                export_current_config_backup || err "[失败] 导出当前配置备份未完成，请查看上方错误信息。"
+                ;;
+            13) exit 0 ;;
             *) err "错误选项。" ;;
         esac
 
         pause_return_menu
     done
+}
+
+run_view_command() {
+    local mode="$LINK_VIEW_MODE"
+    local detail="quick"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            doctor)
+                detail="doctor"
+                ;;
+            ipv4|ipv6|dual)
+                mode="$1"
+                ;;
+            *)
+                err "[失败] 未知 view 参数: $1"
+                echo "用法: ike view [ipv4|ipv6|dual] [doctor]"
+                return 1
+                ;;
+        esac
+        shift
+    done
+
+    view_config "$mode" "$detail"
+}
+
+run_cnblock_command() {
+    local mode="${1:-}"
+
+    case "$mode" in
+        ""|status)
+            echo -e "中国大陆直连屏蔽: ${YELLOW}$(china_direct_block_status)${PLAIN}"
+            echo "用法: ike cnblock basic|enhanced|off"
+            ;;
+        basic|enhanced|off)
+            install_or_update_xray || {
+                err "[失败] Xray 安装/更新失败，无法修改中国大陆直连屏蔽。"
+                return 1
+            }
+            set_china_direct_block "$mode"
+            ;;
+        *)
+            err "[失败] 未知 cnblock 参数: $mode"
+            echo "用法: ike cnblock [basic|enhanced|off]"
+            return 1
+            ;;
+    esac
+}
+
+run_safety_command() {
+    local scope="${1:-}"
+    local action="${2:-}"
+
+    if [[ "$scope" != "enhanced" ]]; then
+        err "[失败] 未知 safety 参数: ${scope:-空}"
+        echo "用法: ike safety enhanced on|off"
+        return 1
+    fi
+
+    case "$action" in
+        on)
+            install_or_update_xray || {
+                err "[失败] Xray 安装/更新失败，无法开启增强安全屏蔽。"
+                return 1
+            }
+            set_enhanced_safety_block "true"
+            ;;
+        off)
+            install_or_update_xray || {
+                err "[失败] Xray 安装/更新失败，无法关闭增强安全屏蔽。"
+                return 1
+            }
+            set_enhanced_safety_block "false"
+            ;;
+        ""|status)
+            echo -e "增强安全屏蔽: ${YELLOW}$(enhanced_safety_block_status)${PLAIN}"
+            echo "用法: ike safety enhanced on|off"
+            ;;
+        *)
+            err "[失败] 未知 safety enhanced 参数: $action"
+            echo "用法: ike safety enhanced on|off"
+            return 1
+            ;;
+    esac
 }
 
 main() {
@@ -1455,10 +2181,20 @@ main() {
 
     case "${1:-}" in
         view)
-            view_config "${2:-$LINK_VIEW_MODE}"
+            shift
+            run_view_command "$@"
             ;;
         update)
             update_xray_core
+            ;;
+        backup)
+            export_current_config_backup
+            ;;
+        cnblock)
+            run_cnblock_command "${2:-}"
+            ;;
+        safety)
+            run_safety_command "${2:-}" "${3:-}"
             ;;
         *)
             show_menu
