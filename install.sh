@@ -23,6 +23,7 @@ XRAY_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 SS_TAG="ss2022-in"
 VLESS_TAG="vless-enc-in"
 SOCKS_TAG="socks-in"
+FORWARD_TAG_PREFIX="forward-"
 BLOCK_OUTBOUND_TAG="BLOCK"
 DEFAULT_SAFETY_BLOCK_PORTS="25,135,137,138,139,445,465,587"
 ENHANCED_SAFETY_BLOCK_PORTS="69,161,162,389,636,1900,5353,5355,11211"
@@ -67,17 +68,17 @@ check_os() {
 detect_arch() {
     ARCH="$(uname -m)"
     case "$ARCH" in
-        x86_64|amd64) XRAY_ASSET="Xray-linux-64.zip" ;;
-        i386|i686) XRAY_ASSET="Xray-linux-32.zip" ;;
-        aarch64|arm64) XRAY_ASSET="Xray-linux-arm64-v8a.zip" ;;
-        armv7l|armv7*) XRAY_ASSET="Xray-linux-arm32-v7a.zip" ;;
-        armv6l|armv6*) XRAY_ASSET="Xray-linux-arm32-v6.zip" ;;
-        armv5l|armv5*) XRAY_ASSET="Xray-linux-arm32-v5.zip" ;;
+        x86_64 | amd64) XRAY_ASSET="Xray-linux-64.zip" ;;
+        i386 | i686) XRAY_ASSET="Xray-linux-32.zip" ;;
+        aarch64 | arm64) XRAY_ASSET="Xray-linux-arm64-v8a.zip" ;;
+        armv7l | armv7*) XRAY_ASSET="Xray-linux-arm32-v7a.zip" ;;
+        armv6l | armv6*) XRAY_ASSET="Xray-linux-arm32-v6.zip" ;;
+        armv5l | armv5*) XRAY_ASSET="Xray-linux-arm32-v5.zip" ;;
         riscv64) XRAY_ASSET="Xray-linux-riscv64.zip" ;;
         s390x) XRAY_ASSET="Xray-linux-s390x.zip" ;;
         ppc64le) XRAY_ASSET="Xray-linux-ppc64le.zip" ;;
         ppc64) XRAY_ASSET="Xray-linux-ppc64.zip" ;;
-        loongarch64|loong64) XRAY_ASSET="Xray-linux-loong64.zip" ;;
+        loongarch64 | loong64) XRAY_ASSET="Xray-linux-loong64.zip" ;;
         *) die "不支持的架构: $ARCH" ;;
     esac
 }
@@ -94,7 +95,7 @@ install_shortcut() {
         fi
         chmod +x "$INSTALLER_PATH"
     elif [[ ! -f "$INSTALLER_PATH" ]]; then
-        cat > "$INSTALLER_PATH" <<EOF
+        cat >"$INSTALLER_PATH" <<EOF
 #!/bin/bash
 SCRIPT_URL="${RAW_SCRIPT_URL}"
 TMP_SCRIPT="\$(mktemp)"
@@ -105,7 +106,7 @@ EOF
         chmod +x "$INSTALLER_PATH"
     fi
 
-    cat > "$SHORTCUT_PATH" <<EOF
+    cat >"$SHORTCUT_PATH" <<EOF
 #!/bin/bash
 if [[ ! -f "$INSTALLER_PATH" ]]; then
     echo "未找到安装器脚本 $INSTALLER_PATH，请重新上传 install.sh 并执行安装。" >&2
@@ -115,7 +116,7 @@ exec bash "$INSTALLER_PATH" "\$@"
 EOF
     chmod +x "$SHORTCUT_PATH"
 
-    cat > "$LEGACY_SHORTCUT_PATH" <<EOF
+    cat >"$LEGACY_SHORTCUT_PATH" <<EOF
 #!/bin/bash
 echo "提示：快捷命令已更名为 ike，sb 仅作为兼容入口，将转发到 ike。" >&2
 if [[ ! -x "$SHORTCUT_PATH" ]]; then
@@ -144,12 +145,12 @@ install_dependencies() {
             apk update
             apk add bash curl wget unzip openssl ca-certificates jq coreutils iproute2 procps net-tools
             ;;
-        ubuntu|debian)
+        ubuntu | debian)
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
             apt-get install -y bash curl wget unzip openssl ca-certificates jq coreutils iproute2 procps
             ;;
-        centos|rhel|rocky|almalinux|fedora)
+        centos | rhel | rocky | almalinux | fedora)
             if command -v dnf >/dev/null 2>&1; then
                 dnf install -y bash curl wget unzip openssl ca-certificates jq coreutils iproute procps-ng
             else
@@ -174,7 +175,7 @@ enable_bbr() {
     fi
 
     info "[系统] 尝试启用 BBR..."
-    cat > /etc/sysctl.d/99-xray-installer-bbr.conf <<EOF
+    cat >/etc/sysctl.d/99-xray-installer-bbr.conf <<EOF
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 EOF
@@ -207,7 +208,7 @@ init_config() {
     fi
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        cat > "$CONFIG_FILE" <<'JSON'
+        cat >"$CONFIG_FILE" <<'JSON'
 {
   "log": {
     "loglevel": "warning"
@@ -229,7 +230,7 @@ JSON
       .log //= {"loglevel":"warning"} |
       .inbounds //= [] |
       .outbounds //= [{"tag":"direct","protocol":"freedom"}]
-    ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+    ' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"
     rm -f "$tmp"
     ensure_default_safety_blocks || return 1
     ensure_config_security
@@ -237,10 +238,10 @@ JSON
 
 init_state() {
     mkdir -p "$CONFIG_DIR"
-    [[ -f "$STATE_FILE" ]] || echo '{}' > "$STATE_FILE"
+    [[ -f "$STATE_FILE" ]] || echo '{}' >"$STATE_FILE"
     if ! jq empty "$STATE_FILE" >/dev/null 2>&1; then
         mv "$STATE_FILE" "${STATE_FILE}.broken.$(date +%Y%m%d%H%M%S)"
-        echo '{}' > "$STATE_FILE"
+        echo '{}' >"$STATE_FILE"
     fi
 
     local tmp
@@ -251,8 +252,9 @@ init_state() {
       else
         .
       end) |
-      .meta = (.meta // {})
-    ' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+      .meta = (.meta // {}) |
+      .forwards = (if (.forwards? | type) == "array" then .forwards else [] end)
+    ' "$STATE_FILE" >"$tmp" && mv "$tmp" "$STATE_FILE"
     rm -f "$tmp"
 
     ensure_config_security
@@ -279,7 +281,7 @@ state_set_meta_action() {
         "last_action": $action,
         "last_updated_at": $updated_at
       })
-    ' "$STATE_FILE" > "$tmp"; then
+    ' "$STATE_FILE" >"$tmp"; then
         rm -f "$tmp"
         err "[失败] [状态] 更新 installer-state.json 失败。"
         return 1
@@ -310,9 +312,15 @@ backup_config() {
 }
 
 restore_latest_config_backup() {
-    local latest_backup
+    local latest_backup candidate
 
-    latest_backup="$(ls -t "${CONFIG_FILE}.bak."* 2>/dev/null | head -n 1 || true)"
+    latest_backup=""
+    for candidate in "${CONFIG_FILE}.bak."*; do
+        [[ -f "$candidate" ]] || continue
+        if [[ -z "$latest_backup" || "$candidate" -nt "$latest_backup" ]]; then
+            latest_backup="$candidate"
+        fi
+    done
     if [[ -z "$latest_backup" || ! -f "$latest_backup" ]]; then
         err "[回滚] 未找到可恢复的配置备份: ${CONFIG_FILE}.bak.*"
         return 1
@@ -392,7 +400,7 @@ create_service() {
     mkdir -p "$ASSET_DIR" /var/log/xray
 
     if [[ "$INIT_SYSTEM" == "systemd" ]]; then
-        cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
+        cat >"/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=Xray Service
 Documentation=https://github.com/XTLS/Xray-core
@@ -421,7 +429,7 @@ EOF
         systemctl daemon-reload
         systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
     elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
-        cat > "/etc/init.d/${SERVICE_NAME}" <<EOF
+        cat >"/etc/init.d/${SERVICE_NAME}" <<EOF
 #!/sbin/openrc-run
 name="xray"
 command="$BIN_PATH"
@@ -684,8 +692,9 @@ warn_reserved_port() {
         info "[提示] ${port} 属于系统保留端口，请确认是否有冲突。"
     fi
     case "$port" in
-        22|53|80|123|443|3306|5432|6379|8080)
-            info "[提示] ${port} 是常见服务端口，请确认不会影响现有业务。" ;;
+        22 | 53 | 80 | 123 | 443 | 3306 | 5432 | 6379 | 8080)
+            info "[提示] ${port} 是常见服务端口，请确认不会影响现有业务。"
+            ;;
     esac
 }
 
@@ -834,7 +843,7 @@ install_ss2022() {
             "level": 0
           }
         }]
-       ' "$CONFIG_FILE" > "$tmp"; then
+       ' "$CONFIG_FILE" >"$tmp"; then
         rm -f "$tmp"
         err "[失败] [SS2022] jq 生成配置失败。"
         return 1
@@ -897,7 +906,7 @@ rewrite_vlessenc_blocks() {
     local -a VLESS_BLOCKS
 
     case "$method" in
-        native|xorpub|random) ;;
+        native | xorpub | random) ;;
         *)
             err "[VLESS] 不支持的外观混淆方法: $method"
             return 1
@@ -930,10 +939,10 @@ rewrite_vlessenc_blocks() {
 
     old_ifs="$IFS"
     IFS='.'
-    read -r -a VLESS_BLOCKS <<< "$value"
+    read -r -a VLESS_BLOCKS <<<"$value"
     IFS="$old_ifs"
 
-    if (( ${#VLESS_BLOCKS[@]} < 4 )); then
+    if ((${#VLESS_BLOCKS[@]} < 4)); then
         err "[VLESS] vlessenc 字符串 block 数不足，无法安全改写。"
         return 1
     fi
@@ -944,7 +953,7 @@ rewrite_vlessenc_blocks() {
     fi
 
     case "${VLESS_BLOCKS[1]}" in
-        native|xorpub|random) ;;
+        native | xorpub | random) ;;
         *)
             err "[VLESS] 未识别的原始外观混淆方法: ${VLESS_BLOCKS[1]}"
             return 1
@@ -1056,14 +1065,14 @@ state_set_vless() {
     local tmp
     tmp="$(mktemp)"
     jq --arg tag "$VLESS_TAG" \
-       --arg uuid "$VLESS_UUID" \
-       --arg encryption "$VLESS_ENCRYPTION" \
-       --arg auth "$VLESS_AUTH" \
-       --arg mode "$VLESS_MODE" \
-       --arg enc_method "$VLESS_ENC_METHOD" \
-       --arg client_rtt "$VLESS_CLIENT_RTT" \
-       --arg server_ticket "$VLESS_SERVER_TICKET" \
-       --arg port "$VLESS_PORT" '
+        --arg uuid "$VLESS_UUID" \
+        --arg encryption "$VLESS_ENCRYPTION" \
+        --arg auth "$VLESS_AUTH" \
+        --arg mode "$VLESS_MODE" \
+        --arg enc_method "$VLESS_ENC_METHOD" \
+        --arg client_rtt "$VLESS_CLIENT_RTT" \
+        --arg server_ticket "$VLESS_SERVER_TICKET" \
+        --arg port "$VLESS_PORT" '
         .vless_encryption = {
           "tag": $tag,
           "uuid": $uuid,
@@ -1075,7 +1084,7 @@ state_set_vless() {
           "server_ticket": $server_ticket,
           "port": ($port|tonumber)
         }
-       ' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+       ' "$STATE_FILE" >"$tmp" && mv "$tmp" "$STATE_FILE"
     rm -f "$tmp"
     ensure_config_security
 }
@@ -1086,10 +1095,10 @@ install_vless_encryption() {
     local tmp
     tmp="$(mktemp)"
     jq --arg tag "$VLESS_TAG" \
-       --arg listen "$VLESS_LISTEN" \
-       --arg port "$VLESS_PORT" \
-       --arg uuid "$VLESS_UUID" \
-       --arg decryption "$VLESS_DECRYPTION" '
+        --arg listen "$VLESS_LISTEN" \
+        --arg port "$VLESS_PORT" \
+        --arg uuid "$VLESS_UUID" \
+        --arg decryption "$VLESS_DECRYPTION" '
         .inbounds = ((.inbounds // []) | map(select(.tag != $tag))) |
         .inbounds += [{
           "tag": $tag,
@@ -1114,7 +1123,7 @@ install_vless_encryption() {
             "destOverride": ["http", "tls"]
           }
         }]
-       ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+       ' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"
     rm -f "$tmp"
 
     state_set_vless
@@ -1138,9 +1147,9 @@ install_socks5() {
     local tmp
     tmp="$(mktemp)"
     jq --arg tag "$SOCKS_TAG" \
-       --arg port "$S_PORT" \
-       --arg user "$S_USER" \
-       --arg pass "$S_PASS" '
+        --arg port "$S_PORT" \
+        --arg user "$S_USER" \
+        --arg pass "$S_PASS" '
         .inbounds = ((.inbounds // []) | map(select(.tag != $tag))) |
         .inbounds += [{
           "tag": $tag,
@@ -1153,7 +1162,7 @@ install_socks5() {
             "udp": true
           }
         }]
-       ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+       ' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"
     rm -f "$tmp"
 
     apply_config || return 1
@@ -1233,6 +1242,7 @@ ensure_default_safety_blocks() {
     }
 
     if ! jq --arg block "$BLOCK_OUTBOUND_TAG" \
+        --arg forward_prefix "$FORWARD_TAG_PREFIX" \
         --arg ports "$DEFAULT_SAFETY_BLOCK_PORTS" \
         --arg private_mode "$private_mode" '
         def private_fallback_ips:
@@ -1246,6 +1256,10 @@ ensure_default_safety_blocks() {
           . == {"type": "field", "ip": ["geoip:private"], "outboundTag": $block} or
           . == {"type": "field", "ip": private_fallback_ips, "outboundTag": $block} or
           . == {"type": "field", "port": $ports, "outboundTag": $block};
+        def forward_relay_rule:
+          (.type == "field") and
+          (.outboundTag == "direct") and
+          (((.inboundTag // []) | if type == "array" then any(.[]; startswith($forward_prefix)) else false end));
 
         .outbounds = (.outbounds // []) |
         if ((.outbounds | map(select(.tag == $block)) | length) > 0) then
@@ -1254,12 +1268,13 @@ ensure_default_safety_blocks() {
           .outbounds += [{"tag": $block, "protocol": "blackhole"}]
         end |
         .routing = (.routing // {}) |
-        .routing.rules = ([
+        .routing.rules = (
+        ((.routing.rules // []) | map(select(forward_relay_rule))) + [
           {"type": "field", "protocol": ["bittorrent"], "outboundTag": $block},
           private_rule,
           {"type": "field", "port": $ports, "outboundTag": $block}
-        ] + ((.routing.rules // []) | map(select((default_safety_rule) | not))))
-      ' "$CONFIG_FILE" > "$tmp"; then
+        ] + ((.routing.rules // []) | map(select((default_safety_rule or forward_relay_rule) | not))))
+      ' "$CONFIG_FILE" >"$tmp"; then
         rm -f "$tmp"
         err "[失败] [安全] 写入默认安全屏蔽规则失败。"
         return 1
@@ -1276,8 +1291,8 @@ default_safety_block_enabled() {
     [[ -f "$CONFIG_FILE" ]] || return 1
     command -v jq >/dev/null 2>&1 || return 1
     jq -e --arg block "$BLOCK_OUTBOUND_TAG" \
-       --arg ports "$DEFAULT_SAFETY_BLOCK_PORTS" \
-       --arg private_mode "$(default_private_block_mode_arg)" '
+        --arg ports "$DEFAULT_SAFETY_BLOCK_PORTS" \
+        --arg private_mode "$(default_private_block_mode_arg)" '
       def private_fallback_ips:
         ["127.0.0.0/8","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","169.254.0.0/16","100.64.0.0/10","::1/128","fc00::/7","fe80::/10"];
       def private_ips:
@@ -1300,7 +1315,7 @@ enhanced_safety_block_enabled() {
     [[ -f "$CONFIG_FILE" ]] || return 1
     command -v jq >/dev/null 2>&1 || return 1
     jq -e --arg block "$BLOCK_OUTBOUND_TAG" \
-       --arg ports "$ENHANCED_SAFETY_BLOCK_PORTS" '
+        --arg ports "$ENHANCED_SAFETY_BLOCK_PORTS" '
       .routing.rules[]? |
       select(. == {"type": "field", "port": $ports, "outboundTag": $block})
     ' "$CONFIG_FILE" >/dev/null 2>&1
@@ -1346,7 +1361,7 @@ set_enhanced_safety_block() {
           .routing.rules = ([
             {"type": "field", "port": $ports, "outboundTag": $block}
           ] + ((.routing.rules // []) | map(select((enhanced_safety_rule) | not))))
-        ' "$CONFIG_FILE" > "$tmp"; then
+        ' "$CONFIG_FILE" >"$tmp"; then
             rm -f "$tmp"
             err "[失败] [安全] 生成增强安全屏蔽规则失败。"
             return 1
@@ -1360,7 +1375,7 @@ set_enhanced_safety_block() {
 
           .routing = (.routing // {}) |
           .routing.rules = ((.routing.rules // []) | map(select((enhanced_safety_rule) | not)))
-        ' "$CONFIG_FILE" > "$tmp"; then
+        ' "$CONFIG_FILE" >"$tmp"; then
             rm -f "$tmp"
             err "[失败] [安全] 移除增强安全屏蔽规则失败。"
             return 1
@@ -1402,7 +1417,10 @@ configure_enhanced_safety_block() {
         case "${choice:-2}" in
             1) set_enhanced_safety_block "false" ;;
             2) info "[安全] 保持开启。" ;;
-            *) err "无效选项。"; return 1 ;;
+            *)
+                err "无效选项。"
+                return 1
+                ;;
         esac
     else
         echo " 1) 开启增强安全屏蔽"
@@ -1411,7 +1429,10 @@ configure_enhanced_safety_block() {
         case "${choice:-2}" in
             1) set_enhanced_safety_block "true" ;;
             2) info "[安全] 保持关闭。" ;;
-            *) err "无效选项。"; return 1 ;;
+            *)
+                err "无效选项。"
+                return 1
+                ;;
         esac
     fi
 }
@@ -1484,7 +1505,7 @@ set_china_direct_block() {
     init_config || return 1
 
     case "$mode" in
-        off|basic|enhanced) ;;
+        off | basic | enhanced) ;;
         *)
             err "[失败] [路由] 未知中国大陆直连屏蔽模式: $mode"
             return 1
@@ -1522,7 +1543,7 @@ set_china_direct_block() {
           .routing.rules = ([
             {"type": "field", "ip": ["geoip:cn"], "outboundTag": $block}
           ] + ((.routing.rules // []) | map(select((cn_block_rule) | not))))
-        ' "$CONFIG_FILE" > "$tmp"; then
+        ' "$CONFIG_FILE" >"$tmp"; then
             rm -f "$tmp"
             err "[失败] [路由] 生成中国大陆直连屏蔽规则失败。"
             return 1
@@ -1545,7 +1566,7 @@ set_china_direct_block() {
             {"type": "field", "ip": ["geoip:cn"], "outboundTag": $block},
             {"type": "field", "domain": ["geosite:cn"], "outboundTag": $block}
           ] + ((.routing.rules // []) | map(select((cn_block_rule) | not))))
-        ' "$CONFIG_FILE" > "$tmp"; then
+        ' "$CONFIG_FILE" >"$tmp"; then
             rm -f "$tmp"
             err "[失败] [路由] 生成中国大陆直连屏蔽规则失败。"
             return 1
@@ -1559,7 +1580,7 @@ set_china_direct_block() {
 
           .routing = (.routing // {}) |
           .routing.rules = ((.routing.rules // []) | map(select((cn_block_rule) | not)))
-        ' "$CONFIG_FILE" > "$tmp"; then
+        ' "$CONFIG_FILE" >"$tmp"; then
             rm -f "$tmp"
             err "[失败] [路由] 移除中国大陆直连屏蔽规则失败。"
             return 1
@@ -1607,7 +1628,10 @@ configure_china_direct_block() {
         2) set_china_direct_block "enhanced" ;;
         3) set_china_direct_block "off" ;;
         4) info "[路由] 保持当前状态。" ;;
-        *) err "无效选项。"; return 1 ;;
+        *)
+            err "无效选项。"
+            return 1
+            ;;
     esac
 }
 
@@ -1662,6 +1686,1166 @@ xray_service_status() {
     fi
 }
 
+random_short_suffix() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 2
+    else
+        printf '%04x' "$((RANDOM % 65536))"
+    fi
+}
+
+port_in_csv() {
+    local port="$1"
+    local csv="$2"
+    local item
+    local -a _port_items
+
+    IFS=',' read -ra _port_items <<<"$csv"
+    for item in "${_port_items[@]}"; do
+        [[ "$port" == "$item" ]] && return 0
+    done
+    return 1
+}
+
+is_private_target_address() {
+    local target="${1,,}"
+    local ip a b _unused_c _unused_d
+
+    target="${target#[}"
+    target="${target%]}"
+    ip="${target%%/*}"
+
+    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        IFS='.' read -r a b _unused_c _unused_d <<<"$ip"
+        a=$((10#$a))
+        b=$((10#$b))
+        if ((a == 10 || a == 127)); then
+            return 0
+        fi
+        if ((a == 172 && b >= 16 && b <= 31)); then
+            return 0
+        fi
+        if ((a == 192 && b == 168)); then
+            return 0
+        fi
+        if ((a == 169 && b == 254)); then
+            return 0
+        fi
+        if ((a == 100 && b >= 64 && b <= 127)); then
+            return 0
+        fi
+        return 1
+    fi
+
+    case "$ip" in
+        ::1 | 0:0:0:0:0:0:0:1 | fc*:* | fd*:* | fe80:*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+confirm_forward_warning() {
+    local message="$1"
+    local confirm
+
+    info "[提示] $message"
+    read -r -p "是否继续? [y/N]: " confirm
+    [[ "$confirm" =~ ^[yY]$ ]]
+}
+
+confirm_forward_safety_warnings() {
+    if [[ "${FORWARD_MODE:-safe}" == "relay" ]]; then
+        confirm_forward_relay_warnings
+        return $?
+    fi
+
+    if port_in_csv "$FORWARD_TARGET_PORT" "$DEFAULT_SAFETY_BLOCK_PORTS"; then
+        confirm_forward_warning "目标端口属于默认安全屏蔽范围，转发可能无法工作。" || return 1
+    fi
+
+    if port_in_csv "$FORWARD_TARGET_PORT" "$ENHANCED_SAFETY_BLOCK_PORTS"; then
+        confirm_forward_warning "目标端口属于增强安全屏蔽范围，如果增强安全屏蔽已启用，转发可能无法工作。" || return 1
+    fi
+
+    if is_private_target_address "$FORWARD_TARGET"; then
+        confirm_forward_warning "目标地址可能属于私网，当前默认安全屏蔽可能会阻断该转发。" || return 1
+    fi
+
+    return 0
+}
+
+confirm_forward_relay_warnings() {
+    local confirm risky="false"
+
+    info "[提示] 专用中转模式会为该转发规则添加 inboundTag -> direct 放行规则，可能绕过默认安全屏蔽，仅建议用于可信固定目标。"
+    read -r -p "请输入 YES 继续: " confirm
+    [[ "$confirm" == "YES" ]] || return 1
+
+    if port_in_csv "$FORWARD_TARGET_PORT" "$DEFAULT_SAFETY_BLOCK_PORTS" ||
+        port_in_csv "$FORWARD_TARGET_PORT" "$ENHANCED_SAFETY_BLOCK_PORTS" ||
+        is_private_target_address "$FORWARD_TARGET"; then
+        risky="true"
+    fi
+
+    if [[ "$risky" == "true" ]]; then
+        info "[提示] 目标命中高风险端口或私网地址；relay 模式会为该 forward inbound 使用 direct 放行。"
+        read -r -p "请再次输入 YES 继续: " confirm
+        [[ "$confirm" == "YES" ]] || return 1
+    fi
+
+    return 0
+}
+
+validate_forward_network() {
+    case "$1" in
+        tcp | udp | tcp,udp) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_forward_mode() {
+    case "$1" in
+        safe | relay) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+forward_tag_exists() {
+    local tag="$1"
+
+    if [[ -f "$CONFIG_FILE" ]] && jq -e --arg tag "$tag" 'any(.inbounds[]?; .tag == $tag)' "$CONFIG_FILE" >/dev/null 2>&1; then
+        return 0
+    fi
+    if [[ -f "$STATE_FILE" ]] && jq -e --arg tag "$tag" 'any(.forwards[]?; .tag == $tag)' "$STATE_FILE" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+generate_forward_tag() {
+    local base
+
+    base="${FORWARD_TAG_PREFIX}${FORWARD_LISTEN_PORT}-${FORWARD_TARGET_PORT}"
+    FORWARD_TAG="$(generate_unique_forward_tag_from_base "$base")"
+}
+
+generate_unique_forward_tag_from_base() {
+    local base="$1"
+    local suffix tag
+
+    [[ -n "$base" ]] || {
+        err "[失败] [端口转发] 生成 tag 失败：base 为空。"
+        return 1
+    }
+    tag="$base"
+    while forward_tag_exists "$tag"; do
+        suffix="$(random_short_suffix)"
+        tag="${base}-${suffix}"
+    done
+    printf '%s' "$tag"
+}
+
+forward_rule_lines() {
+    [[ -f "$CONFIG_FILE" ]] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+
+    jq -r --arg prefix "$FORWARD_TAG_PREFIX" '
+      .inbounds[]? |
+      select((.tag // "") | startswith($prefix)) |
+      select(.protocol == "dokodemo-door") |
+      [
+        .tag,
+        (.listen // "0.0.0.0"),
+        (.port | tostring),
+        (.settings.address // ""),
+        (.settings.port | tostring),
+        (.settings.network // "tcp")
+      ] | @tsv
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+forward_state_lines() {
+    [[ -f "$STATE_FILE" ]] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+
+    jq -r '
+      .forwards[]? |
+      [
+        (.tag // ""),
+        (.listen // "0.0.0.0"),
+        (.listen_port | tostring),
+        (.target // ""),
+        (.target_port | tostring),
+        (.network // "tcp"),
+        (.mode // "safe"),
+        (.remark // ""),
+        ((.enabled // true) | tostring)
+      ] | @tsv
+    ' "$STATE_FILE" 2>/dev/null
+}
+
+forward_config_has_tag() {
+    local tag="$1"
+
+    [[ -f "$CONFIG_FILE" ]] || return 1
+    jq -e --arg tag "$tag" '
+      any(.inbounds[]?; (.tag == $tag) and (.protocol == "dokodemo-door"))
+    ' "$CONFIG_FILE" >/dev/null 2>&1
+}
+
+forward_tag_known() {
+    local tag="$1"
+
+    forward_config_has_tag "$tag" && return 0
+    [[ -f "$STATE_FILE" ]] || return 1
+    jq -e --arg tag "$tag" 'any(.forwards[]?; .tag == $tag)' "$STATE_FILE" >/dev/null 2>&1
+}
+
+forward_rule_count() {
+    [[ -f "$CONFIG_FILE" ]] || {
+        printf '%s' "0"
+        return 0
+    }
+    command -v jq >/dev/null 2>&1 || {
+        printf '%s' "0"
+        return 0
+    }
+
+    jq -r --arg prefix "$FORWARD_TAG_PREFIX" '
+      [ .inbounds[]? |
+        select((.tag // "") | startswith($prefix)) |
+        select(.protocol == "dokodemo-door")
+      ] | length
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+forward_remark_for_tag() {
+    local tag="$1"
+
+    [[ -f "$STATE_FILE" ]] || return 0
+    jq -r --arg tag "$tag" '.forwards[]? | select(.tag == $tag) | .remark // empty' "$STATE_FILE" 2>/dev/null | head -n 1
+}
+
+forward_mode_for_tag() {
+    local tag="$1"
+
+    if [[ -f "$CONFIG_FILE" ]] && jq -e --arg tag "$tag" '
+      any(.routing.rules[]?;
+        (.type == "field") and
+        (.outboundTag == "direct") and
+        (((.inboundTag // []) | if type == "array" then any(.[]; . == $tag) else false end))
+      )
+    ' "$CONFIG_FILE" >/dev/null 2>&1; then
+        printf '%s' "relay"
+    else
+        printf '%s' "safe"
+    fi
+}
+
+forward_all_lines() {
+    local line tag listen listen_port target target_port network mode remark enabled seen_tags
+    seen_tags="|"
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        IFS=$'\t' read -r tag listen listen_port target target_port network <<<"$line"
+        [[ -n "$tag" ]] || continue
+        mode="$(forward_mode_for_tag "$tag")"
+        remark="$(forward_remark_for_tag "$tag")"
+        printf '启用\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$tag" "$listen" "$listen_port" "$target" "$target_port" "$network" "$remark"
+        seen_tags="${seen_tags}${tag}|"
+    done < <(forward_rule_lines)
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        IFS=$'\t' read -r tag listen listen_port target target_port network mode remark enabled <<<"$line"
+        [[ -n "$tag" ]] || continue
+        [[ "$seen_tags" == *"|${tag}|"* ]] && continue
+        printf '停用\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${mode:-safe}" "$tag" "$listen" "$listen_port" "$target" "$target_port" "${network:-tcp}" "$remark"
+    done < <(forward_state_lines)
+}
+
+load_forward_vars_from_tag() {
+    local tag="$1"
+    local line
+
+    if forward_config_has_tag "$tag"; then
+        line="$(jq -r --arg tag "$tag" '
+          .inbounds[]? |
+          select((.tag == $tag) and (.protocol == "dokodemo-door")) |
+          [
+            .tag,
+            (.listen // "0.0.0.0"),
+            (.port | tostring),
+            (.settings.address // ""),
+            (.settings.port | tostring),
+            (.settings.network // "tcp")
+          ] | @tsv
+        ' "$CONFIG_FILE" 2>/dev/null | head -n 1)"
+        [[ -n "$line" ]] || return 1
+        IFS=$'\t' read -r FORWARD_TAG FORWARD_LISTEN FORWARD_LISTEN_PORT FORWARD_TARGET FORWARD_TARGET_PORT FORWARD_NETWORK <<<"$line"
+        FORWARD_MODE="$(forward_mode_for_tag "$FORWARD_TAG")"
+        FORWARD_REMARK="$(forward_remark_for_tag "$FORWARD_TAG")"
+        FORWARD_ENABLED="true"
+        return 0
+    fi
+
+    [[ -f "$STATE_FILE" ]] || return 1
+    line="$(jq -r --arg tag "$tag" '
+      .forwards[]? |
+      select(.tag == $tag) |
+      [
+        .tag,
+        (.listen // "0.0.0.0"),
+        (.listen_port | tostring),
+        (.target // ""),
+        (.target_port | tostring),
+        (.network // "tcp"),
+        (.mode // "safe"),
+        (.remark // ""),
+        ((.enabled // false) | tostring)
+      ] | @tsv
+    ' "$STATE_FILE" 2>/dev/null | head -n 1)"
+    [[ -n "$line" ]] || return 1
+    IFS=$'\t' read -r FORWARD_TAG FORWARD_LISTEN FORWARD_LISTEN_PORT FORWARD_TARGET FORWARD_TARGET_PORT FORWARD_NETWORK FORWARD_MODE FORWARD_REMARK FORWARD_ENABLED <<<"$line"
+}
+
+select_forward_tag() {
+    local filter="${1:-all}"
+    local direct_tag="${2:-}"
+    local line status mode tag listen listen_port target target_port network remark
+    local records=()
+    local tags=()
+    local idx selected
+
+    if [[ -n "$direct_tag" ]]; then
+        if forward_tag_known "$direct_tag"; then
+            SELECTED_FORWARD_TAG="$direct_tag"
+            return 0
+        fi
+        err "[失败] 未找到转发规则: $direct_tag"
+        return 1
+    fi
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        IFS=$'\t' read -r status mode tag listen listen_port target target_port network remark <<<"$line"
+        case "$filter" in
+            enabled) [[ "$status" == "启用" ]] || continue ;;
+            disabled) [[ "$status" == "停用" ]] || continue ;;
+        esac
+        records+=("$line")
+        tags+=("$tag")
+    done < <(forward_all_lines)
+
+    if [[ ${#records[@]} -eq 0 ]]; then
+        err "[失败] 没有可选择的转发规则。"
+        return 1
+    fi
+
+    echo -e "\n${YELLOW}[端口转发] 选择规则${PLAIN}"
+    idx=1
+    for line in "${records[@]}"; do
+        IFS=$'\t' read -r status mode tag listen listen_port target target_port network remark <<<"$line"
+        if [[ -n "$remark" ]]; then
+            echo " ${idx}) ${status} ${mode} ${tag}: ${listen}:${listen_port} -> ${target}:${target_port}/${network} ${remark}"
+        else
+            echo " ${idx}) ${status} ${mode} ${tag}: ${listen}:${listen_port} -> ${target}:${target_port}/${network}"
+        fi
+        ((idx++))
+    done
+
+    read -r -p "请选择规则编号: " selected
+    if ! [[ "$selected" =~ ^[0-9]+$ ]] || ((selected < 1 || selected > ${#tags[@]})); then
+        err "[失败] [端口转发] 无效编号。"
+        return 1
+    fi
+
+    SELECTED_FORWARD_TAG="${tags[$((selected - 1))]}"
+}
+
+list_forward_rules() {
+    local line status tag listen listen_port target target_port network mode remark
+    local rules=()
+
+    if ! command -v jq >/dev/null 2>&1; then
+        err "[失败] [端口转发] 缺少 jq，无法读取配置。"
+        return 1
+    fi
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        info "[端口转发] 未找到配置文件，请先安装 Xray 或协议。"
+        return 0
+    fi
+
+    mapfile -t rules < <(forward_all_lines)
+    if [[ ${#rules[@]} -eq 0 ]]; then
+        info "[端口转发] 当前未配置转发规则。"
+        return 0
+    fi
+
+    echo -e "\n${YELLOW}--- 中转/端口转发 ---${PLAIN}"
+    printf '%-6s %-6s %s\n' "状态" "模式" "规则"
+    for line in "${rules[@]}"; do
+        IFS=$'\t' read -r status mode tag listen listen_port target target_port network remark <<<"$line"
+        if [[ -n "$remark" ]]; then
+            printf '%-6s %-6s %s: %s:%s -> %s:%s/%s %s\n' "$status" "$mode" "$tag" "$listen" "$listen_port" "$target" "$target_port" "$network" "$remark"
+        else
+            printf '%-6s %-6s %s: %s:%s -> %s:%s/%s\n' "$status" "$mode" "$tag" "$listen" "$listen_port" "$target" "$target_port" "$network"
+        fi
+    done
+}
+
+state_sync_forward_rule() {
+    local tmp
+
+    init_state
+    tmp="$(mktemp)" || {
+        err "[失败] [端口转发] 创建状态临时文件失败。"
+        return 1
+    }
+
+    if ! jq --arg tag "$FORWARD_TAG" \
+        --arg listen "$FORWARD_LISTEN" \
+        --arg listen_port "$FORWARD_LISTEN_PORT" \
+        --arg target "$FORWARD_TARGET" \
+        --arg target_port "$FORWARD_TARGET_PORT" \
+        --arg network "$FORWARD_NETWORK" \
+        --arg mode "$FORWARD_MODE" \
+        --arg enabled "${FORWARD_ENABLED:-true}" \
+        --arg remark "$FORWARD_REMARK" '
+        .forwards = ((.forwards // []) | map(select(.tag != $tag))) |
+        .forwards += [{
+          "tag": $tag,
+          "listen": $listen,
+          "listen_port": ($listen_port | tonumber),
+          "target": $target,
+          "target_port": ($target_port | tonumber),
+          "network": $network,
+          "mode": $mode,
+          "enabled": ($enabled == "true"),
+          "remark": $remark
+        }]
+      ' "$STATE_FILE" >"$tmp"; then
+        rm -f "$tmp"
+        err "[失败] [端口转发] 写入状态文件失败。"
+        return 1
+    fi
+
+    if ! mv "$tmp" "$STATE_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [端口转发] 更新状态文件失败。"
+        return 1
+    fi
+    ensure_config_security
+}
+
+state_delete_forward_rule() {
+    local tag="$1"
+    local tmp
+
+    [[ -f "$STATE_FILE" ]] || return 0
+    tmp="$(mktemp)" || {
+        err "[失败] [端口转发] 创建状态临时文件失败。"
+        return 1
+    }
+
+    if ! jq --arg tag "$tag" '.forwards = ((.forwards // []) | map(select(.tag != $tag)))' "$STATE_FILE" >"$tmp"; then
+        rm -f "$tmp"
+        err "[失败] [端口转发] 删除状态记录失败。"
+        return 1
+    fi
+
+    if ! mv "$tmp" "$STATE_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [端口转发] 更新状态文件失败。"
+        return 1
+    fi
+    ensure_config_security
+}
+
+configure_forward_rule() {
+    local input
+
+    FORWARD_MODE="${1:-${FORWARD_MODE:-safe}}"
+    validate_forward_mode "$FORWARD_MODE" || {
+        err "[失败] [端口转发] 未知转发模式: $FORWARD_MODE"
+        return 1
+    }
+
+    echo -e "\n${YELLOW}[中转/端口转发] 添加转发规则 (${FORWARD_MODE})${PLAIN}"
+    read -r -p "本机监听地址 (默认: 0.0.0.0): " FORWARD_LISTEN
+    FORWARD_LISTEN="${FORWARD_LISTEN:-0.0.0.0}"
+    if [[ "$FORWARD_LISTEN" =~ [[:space:]] || -z "$FORWARD_LISTEN" ]]; then
+        err "[失败] [端口转发] 本机监听地址无效。"
+        return 1
+    fi
+
+    ask_port "本机监听端口" "30000" FORWARD_LISTEN_PORT || return 1
+
+    read -r -p "目标地址，例如 1.2.3.4 或 example.com: " FORWARD_TARGET
+    if [[ -z "$FORWARD_TARGET" || "$FORWARD_TARGET" =~ [[:space:]] ]]; then
+        err "[失败] [端口转发] 目标地址无效。"
+        return 1
+    fi
+
+    while true; do
+        read -r -p "目标端口: " FORWARD_TARGET_PORT
+        if validate_port "$FORWARD_TARGET_PORT"; then
+            break
+        fi
+        err "端口无效，请输入 1-65535 之间的数字。"
+    done
+
+    read -r -p "网络类型 tcp / udp / tcp,udp (默认: tcp): " input
+    FORWARD_NETWORK="${input:-tcp}"
+    if ! validate_forward_network "$FORWARD_NETWORK"; then
+        err "[失败] [端口转发] 网络类型无效，仅支持 tcp、udp、tcp,udp。"
+        return 1
+    fi
+
+    read -r -p "备注名称，可选: " FORWARD_REMARK
+    confirm_forward_safety_warnings || {
+        err "[取消] 已取消添加端口转发。"
+        return 1
+    }
+}
+
+remove_forward_config_by_tag() {
+    local tag="$1"
+    local tmp
+
+    [[ -f "$CONFIG_FILE" ]] || return 0
+
+    tmp="$(mktemp)" || {
+        err "[失败] [端口转发] 创建临时文件失败。"
+        return 1
+    }
+
+    if ! jq --arg tag "$tag" --arg prefix "$FORWARD_TAG_PREFIX" '
+        def selected_relay_rule:
+          (.type == "field") and
+          (.outboundTag == "direct") and
+          (((.inboundTag // []) | if type == "array" then any(.[]; . == $tag) else false end));
+        .inbounds = ((.inbounds // []) | map(select((.tag != $tag) or ((.tag // "") | startswith($prefix) | not)))) |
+        .routing = (.routing // {}) |
+        .routing.rules = ((.routing.rules // []) | map(select((selected_relay_rule) | not)))
+      ' "$CONFIG_FILE" >"$tmp"; then
+        rm -f "$tmp"
+        err "[失败] [端口转发] 生成配置失败。"
+        return 1
+    fi
+
+    if ! mv "$tmp" "$CONFIG_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [端口转发] 写入 $CONFIG_FILE 失败。"
+        return 1
+    fi
+}
+
+write_forward_config_from_vars() {
+    local tmp
+
+    FORWARD_ENABLED="${FORWARD_ENABLED:-true}"
+    tmp="$(mktemp)" || {
+        err "[失败] [端口转发] 创建临时文件失败。"
+        return 1
+    }
+
+    if ! jq --arg tag "$FORWARD_TAG" \
+        --arg prefix "$FORWARD_TAG_PREFIX" \
+        --arg listen "$FORWARD_LISTEN" \
+        --arg listen_port "$FORWARD_LISTEN_PORT" \
+        --arg target "$FORWARD_TARGET" \
+        --arg target_port "$FORWARD_TARGET_PORT" \
+        --arg network "$FORWARD_NETWORK" \
+        --arg mode "$FORWARD_MODE" \
+        --arg enabled "$FORWARD_ENABLED" '
+        def relay_rule:
+          {"type": "field", "inboundTag": [$tag], "outboundTag": "direct"};
+        def selected_relay_rule:
+          (.type == "field") and
+          (.outboundTag == "direct") and
+          (((.inboundTag // []) | if type == "array" then any(.[]; . == $tag) else false end));
+        def forward_inbound:
+          {
+            "tag": $tag,
+            "listen": $listen,
+            "port": ($listen_port | tonumber),
+            "protocol": "dokodemo-door",
+            "settings": {
+              "address": $target,
+              "port": ($target_port | tonumber),
+              "network": $network
+            }
+          };
+        .inbounds = ((.inbounds // []) | map(select((.tag != $tag) or ((.tag // "") | startswith($prefix) | not)))) |
+        .routing = (.routing // {}) |
+        .routing.rules = ((.routing.rules // []) | map(select((selected_relay_rule) | not))) |
+        if $enabled == "true" then
+          .inbounds += [forward_inbound] |
+          if $mode == "relay" then
+            .routing.rules = ([relay_rule] + ((.routing.rules // []) | map(select(. != relay_rule))))
+          else
+            .
+          end
+        else
+          .
+        end
+      ' "$CONFIG_FILE" >"$tmp"; then
+        rm -f "$tmp"
+        err "[失败] [端口转发] 生成配置失败。"
+        return 1
+    fi
+
+    if ! mv "$tmp" "$CONFIG_FILE"; then
+        rm -f "$tmp"
+        err "[失败] [端口转发] 写入 $CONFIG_FILE 失败。"
+        return 1
+    fi
+}
+
+install_forward_rule() {
+    FORWARD_MODE="${FORWARD_MODE:-safe}"
+    FORWARD_ENABLED="true"
+    validate_forward_mode "$FORWARD_MODE" || {
+        err "[失败] [端口转发] 未知转发模式: $FORWARD_MODE"
+        return 1
+    }
+
+    install_or_update_xray || {
+        err "[失败] [端口转发] Xray 安装/更新失败。"
+        return 1
+    }
+    generate_forward_tag
+    backup_config || {
+        err "[失败] [端口转发] 配置备份失败。"
+        return 1
+    }
+
+    write_forward_config_from_vars || return 1
+
+    if ! apply_config "端口转发"; then
+        err "[失败] [端口转发] 应用配置失败。"
+        return 1
+    fi
+
+    state_sync_forward_rule || err "[状态] 转发状态记录失败，但 config.json 已生效。"
+    state_set_meta_action "添加端口转发" || err "[状态] 最近变更记录失败。"
+    ok "[完成] 端口转发已添加: ${FORWARD_TAG}"
+}
+
+delete_forward_rule() {
+    local selected_tag="${1:-}"
+
+    select_forward_tag "all" "$selected_tag" || return 1
+    selected_tag="$SELECTED_FORWARD_TAG"
+
+    if ! forward_config_has_tag "$selected_tag"; then
+        state_delete_forward_rule "$selected_tag" || err "[状态] 转发状态记录删除失败。"
+        state_set_meta_action "删除端口转发" || err "[状态] 最近变更记录失败。"
+        ok "[完成] 已删除停用转发规则: ${selected_tag}"
+        return 0
+    fi
+
+    backup_config || {
+        err "[失败] [端口转发] 配置备份失败。"
+        return 1
+    }
+
+    remove_forward_config_by_tag "$selected_tag" || return 1
+
+    if ! apply_config "端口转发"; then
+        err "[失败] [端口转发] 应用删除失败。"
+        return 1
+    fi
+
+    state_delete_forward_rule "$selected_tag" || err "[状态] 转发状态记录删除失败，但 config.json 已生效。"
+    state_set_meta_action "删除端口转发" || err "[状态] 最近变更记录失败。"
+    ok "[完成] 端口转发已删除: ${selected_tag}"
+}
+
+set_forward_enabled() {
+    local enable="$1"
+    local selected_tag="${2:-}"
+    local filter action context
+
+    if [[ "$enable" == "true" ]]; then
+        filter="disabled"
+        action="启用"
+    else
+        filter="enabled"
+        action="停用"
+    fi
+
+    select_forward_tag "$filter" "$selected_tag" || return 1
+    selected_tag="$SELECTED_FORWARD_TAG"
+    load_forward_vars_from_tag "$selected_tag" || {
+        err "[失败] [端口转发] 无法读取规则: $selected_tag"
+        return 1
+    }
+
+    if [[ "$enable" == "true" && "$FORWARD_ENABLED" == "true" ]] && forward_config_has_tag "$FORWARD_TAG"; then
+        info "[端口转发] 规则已启用: $FORWARD_TAG"
+        return 0
+    fi
+    if [[ "$enable" == "false" ]] && ! forward_config_has_tag "$FORWARD_TAG"; then
+        FORWARD_ENABLED="false"
+        state_sync_forward_rule || err "[状态] 转发状态记录失败。"
+        info "[端口转发] 规则已停用: $FORWARD_TAG"
+        return 0
+    fi
+
+    if [[ "$enable" == "true" ]]; then
+        install_or_update_xray || return 1
+    fi
+
+    backup_config || {
+        err "[失败] [端口转发] 配置备份失败。"
+        return 1
+    }
+
+    FORWARD_ENABLED="$enable"
+    if [[ "$enable" == "true" ]]; then
+        write_forward_config_from_vars || return 1
+    else
+        remove_forward_config_by_tag "$FORWARD_TAG" || return 1
+    fi
+
+    if ! apply_config "端口转发"; then
+        err "[失败] [端口转发] ${action}失败。"
+        return 1
+    fi
+
+    state_sync_forward_rule || err "[状态] 转发状态记录失败，但 config.json 已生效。"
+    context="${action}端口转发"
+    state_set_meta_action "$context" || err "[状态] 最近变更记录失败。"
+    ok "[完成] ${context}: ${FORWARD_TAG}"
+}
+
+prompt_forward_port_value() {
+    local label="$1"
+    local current="$2"
+    local __resultvar="$3"
+    local input
+
+    while true; do
+        read -r -p "${label} (当前: ${current}): " input
+        input="${input:-$current}"
+        if validate_port "$input"; then
+            printf -v "$__resultvar" '%s' "$input"
+            return 0
+        fi
+        err "端口无效，请输入 1-65535 之间的数字。"
+    done
+}
+
+edit_forward_rule() {
+    local selected_tag="${1:-}"
+    local old_tag old_listen_port old_target_port input regen_tag
+
+    select_forward_tag "all" "$selected_tag" || return 1
+    load_forward_vars_from_tag "$SELECTED_FORWARD_TAG" || {
+        err "[失败] [端口转发] 无法读取规则: $SELECTED_FORWARD_TAG"
+        return 1
+    }
+
+    old_tag="$FORWARD_TAG"
+    old_listen_port="$FORWARD_LISTEN_PORT"
+    old_target_port="$FORWARD_TARGET_PORT"
+
+    echo -e "\n${YELLOW}[端口转发] 修改规则: ${old_tag}${PLAIN}"
+    read -r -p "本机监听地址 (当前: ${FORWARD_LISTEN}): " input
+    [[ -n "$input" ]] && FORWARD_LISTEN="$input"
+    [[ -z "$FORWARD_LISTEN" || "$FORWARD_LISTEN" =~ [[:space:]] ]] && {
+        err "[失败] [端口转发] 本机监听地址无效。"
+        return 1
+    }
+
+    prompt_forward_port_value "本机监听端口" "$FORWARD_LISTEN_PORT" FORWARD_LISTEN_PORT || return 1
+
+    read -r -p "目标地址 (当前: ${FORWARD_TARGET}): " input
+    [[ -n "$input" ]] && FORWARD_TARGET="$input"
+    [[ -z "$FORWARD_TARGET" || "$FORWARD_TARGET" =~ [[:space:]] ]] && {
+        err "[失败] [端口转发] 目标地址无效。"
+        return 1
+    }
+
+    prompt_forward_port_value "目标端口" "$FORWARD_TARGET_PORT" FORWARD_TARGET_PORT || return 1
+
+    read -r -p "网络类型 tcp / udp / tcp,udp (当前: ${FORWARD_NETWORK}): " input
+    [[ -n "$input" ]] && FORWARD_NETWORK="$input"
+    validate_forward_network "$FORWARD_NETWORK" || {
+        err "[失败] [端口转发] 网络类型无效。"
+        return 1
+    }
+
+    read -r -p "模式 safe / relay (当前: ${FORWARD_MODE}): " input
+    [[ -n "$input" ]] && FORWARD_MODE="$input"
+    validate_forward_mode "$FORWARD_MODE" || {
+        err "[失败] [端口转发] 模式无效。"
+        return 1
+    }
+
+    read -r -p "备注名称 (当前: ${FORWARD_REMARK:-无}): " input
+    [[ -n "$input" ]] && FORWARD_REMARK="$input"
+
+    confirm_forward_safety_warnings || {
+        err "[取消] 已取消修改端口转发。"
+        return 1
+    }
+
+    if [[ "$FORWARD_LISTEN_PORT" != "$old_listen_port" || "$FORWARD_TARGET_PORT" != "$old_target_port" ]]; then
+        read -r -p "监听端口或目标端口已改变，是否重新生成 tag? [y/N]: " regen_tag
+        if [[ "$regen_tag" =~ ^[yY]$ ]]; then
+            generate_forward_tag
+        else
+            FORWARD_TAG="$old_tag"
+        fi
+    fi
+
+    FORWARD_ENABLED="true"
+    install_or_update_xray || return 1
+    backup_config || {
+        err "[失败] [端口转发] 配置备份失败。"
+        return 1
+    }
+
+    remove_forward_config_by_tag "$old_tag" || return 1
+    write_forward_config_from_vars || return 1
+
+    if ! apply_config "端口转发"; then
+        err "[失败] [端口转发] 修改失败。"
+        return 1
+    fi
+
+    if [[ "$FORWARD_TAG" != "$old_tag" ]]; then
+        state_delete_forward_rule "$old_tag" || err "[状态] 旧转发状态删除失败，但 config.json 已生效。"
+    fi
+    state_sync_forward_rule || err "[状态] 转发状态记录失败，但 config.json 已生效。"
+    state_set_meta_action "修改端口转发" || err "[状态] 最近变更记录失败。"
+    ok "[完成] 端口转发已修改: ${FORWARD_TAG}"
+}
+
+forward_target_is_ip_literal() {
+    local target="$1"
+
+    [[ "$target" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || "$target" == *:* ]]
+}
+
+test_forward_rule() {
+    local selected_tag="${1:-}"
+    local status nc_bin
+
+    select_forward_tag "all" "$selected_tag" || return 1
+    load_forward_vars_from_tag "$SELECTED_FORWARD_TAG" || {
+        err "[失败] [端口转发] 无法读取规则: $SELECTED_FORWARD_TAG"
+        return 1
+    }
+
+    status="停用"
+    forward_config_has_tag "$FORWARD_TAG" && status="启用"
+
+    echo -e "\n${YELLOW}--- 转发目标测试 ---${PLAIN}"
+    echo "规则: ${FORWARD_TAG} [${FORWARD_MODE}] (${status})"
+    echo "链路: ${FORWARD_LISTEN}:${FORWARD_LISTEN_PORT} -> ${FORWARD_TARGET}:${FORWARD_TARGET_PORT}/${FORWARD_NETWORK}"
+    [[ -n "$FORWARD_REMARK" ]] && echo "备注: ${FORWARD_REMARK}"
+
+    if ! forward_target_is_ip_literal "$FORWARD_TARGET"; then
+        if command -v getent >/dev/null 2>&1; then
+            echo -e "\n[解析] getent ahosts ${FORWARD_TARGET}"
+            getent ahosts "$FORWARD_TARGET" || info "[解析] 未获得解析结果。"
+        else
+            info "[解析] 缺少 getent，已跳过域名解析测试。"
+        fi
+    fi
+
+    if [[ "$FORWARD_NETWORK" == *tcp* ]]; then
+        nc_bin="$(command -v nc || true)"
+        if [[ -n "$nc_bin" ]]; then
+            if nc -z -w3 "$FORWARD_TARGET" "$FORWARD_TARGET_PORT" >/dev/null 2>&1; then
+                ok "[TCP] 目标 ${FORWARD_TARGET}:${FORWARD_TARGET_PORT} 可连接。"
+            else
+                err "[TCP] 目标 ${FORWARD_TARGET}:${FORWARD_TARGET_PORT} 连接失败。"
+            fi
+        else
+            info "[TCP] 未检测到 nc，请安装 netcat-openbsd 后重试，或跳过目标连通性测试。"
+        fi
+    fi
+
+    if [[ "$FORWARD_NETWORK" == *udp* ]]; then
+        info "[UDP] UDP 无法通过简单握手可靠判断，仅检查配置和本地监听。"
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        echo -e "\n[监听] ss -tulpn | grep ${FORWARD_LISTEN_PORT}"
+        ss -tulpn 2>/dev/null | grep -E "[:.]${FORWARD_LISTEN_PORT}[[:space:]]" | grep xray || info "[监听] 未看到 xray 监听该端口。"
+    else
+        info "[监听] 缺少 ss，无法检查本机监听。"
+    fi
+}
+
+export_forward_rules() {
+    local timestamp outfile
+
+    command -v jq >/dev/null 2>&1 || {
+        err "[失败] [端口转发] 缺少 jq，无法导出。"
+        return 1
+    }
+
+    timestamp="$(date +%Y%m%d%H%M%S)"
+    outfile="${FORWARD_EXPORT_DIR:-/root}/xray-forwards-${timestamp}.json"
+
+    if [[ -f "$STATE_FILE" ]] && jq -e '((.forwards // []) | length) > 0' "$STATE_FILE" >/dev/null 2>&1; then
+        jq '{forwards: (.forwards // [])}' "$STATE_FILE" >"$outfile" || {
+            err "[失败] [端口转发] 导出 state 失败。"
+            return 1
+        }
+    elif [[ -f "$CONFIG_FILE" ]]; then
+        jq --arg prefix "$FORWARD_TAG_PREFIX" '
+          . as $root |
+          {
+            forwards: [
+              $root.inbounds[]? |
+              select((.tag // "") | startswith($prefix)) |
+              select(.protocol == "dokodemo-door") |
+              . as $in |
+              {
+                tag: $in.tag,
+                listen: ($in.listen // "0.0.0.0"),
+                listen_port: $in.port,
+                target: ($in.settings.address // ""),
+                target_port: $in.settings.port,
+                network: ($in.settings.network // "tcp"),
+                mode: (if any($root.routing.rules[]?; (.type == "field") and (.outboundTag == "direct") and (((.inboundTag // []) | if type == "array" then any(.[]; . == $in.tag) else false end))) then "relay" else "safe" end),
+                remark: "",
+                enabled: true
+              }
+            ]
+          }
+        ' "$CONFIG_FILE" >"$outfile" || {
+            err "[失败] [端口转发] 从 config.json 导出失败。"
+            return 1
+        }
+    else
+        printf '{\n  "forwards": []\n}\n' >"$outfile"
+    fi
+
+    chmod 600 "$outfile" 2>/dev/null || true
+    ok "[完成] 转发规则已导出: $outfile"
+}
+
+import_forward_rules() {
+    local import_file tmp_records line tag listen listen_port target target_port network mode remark enabled choice imported new_tag
+    local import_lines=()
+
+    command -v jq >/dev/null 2>&1 || {
+        err "[失败] [端口转发] 缺少 jq，无法导入。"
+        return 1
+    }
+
+    read -r -p "导入文件路径: " import_file
+    import_file="${import_file//$'\r'/}"
+    [[ -f "$import_file" ]] || {
+        err "[失败] [端口转发] 未找到导入文件: $import_file"
+        return 1
+    }
+
+    jq empty "$import_file" >/dev/null 2>&1 || {
+        err "[失败] [端口转发] JSON 格式无效。"
+        return 1
+    }
+
+    jq -e '
+      def src: if type == "array" then . else (.forwards // []) end;
+      def valid_port(p): ((try (p | tonumber) catch 0) >= 1 and (try (p | tonumber) catch 0) <= 65535);
+      (src | type) == "array" and
+      all(src[]?;
+        (.tag | type == "string") and (.tag | startswith("forward-")) and
+        (.listen | type == "string") and
+        valid_port(.listen_port) and
+        (.target | type == "string") and
+        valid_port(.target_port) and
+        ((.network // "tcp") as $n | ["tcp","udp","tcp,udp"] | index($n)) and
+        ((.mode // "safe") as $m | ["safe","relay"] | index($m))
+      )
+    ' "$import_file" >/dev/null || {
+        err "[失败] [端口转发] 导入文件缺少必要字段或字段非法。"
+        return 1
+    }
+
+    install_or_update_xray || return 1
+    backup_config || {
+        err "[失败] [端口转发] 配置备份失败。"
+        return 1
+    }
+
+    tmp_records="$(mktemp)" || return 1
+    imported=0
+
+    mapfile -t import_lines < <(jq -r '
+      def src: if type == "array" then . else (.forwards // []) end;
+      src[]? |
+      [
+        .tag,
+        .listen,
+        (.listen_port | tostring),
+        .target,
+        (.target_port | tostring),
+        (.network // "tcp"),
+        (.mode // "safe"),
+        (.remark // ""),
+        ((.enabled // true) | tostring)
+      ] | @tsv
+    ' "$import_file")
+
+    for line in "${import_lines[@]}"; do
+        IFS=$'\t' read -r tag listen listen_port target target_port network mode remark enabled <<<"$line"
+        tag="${tag//$'\r'/}"
+        listen="${listen//$'\r'/}"
+        listen_port="${listen_port//$'\r'/}"
+        target="${target//$'\r'/}"
+        target_port="${target_port//$'\r'/}"
+        network="${network//$'\r'/}"
+        mode="${mode//$'\r'/}"
+        remark="${remark//$'\r'/}"
+        enabled="${enabled//$'\r'/}"
+        FORWARD_TAG="$tag"
+        FORWARD_LISTEN="$listen"
+        FORWARD_LISTEN_PORT="$listen_port"
+        FORWARD_TARGET="$target"
+        FORWARD_TARGET_PORT="$target_port"
+        FORWARD_NETWORK="${network:-tcp}"
+        FORWARD_MODE="${mode:-safe}"
+        FORWARD_REMARK="$remark"
+        FORWARD_ENABLED="${enabled:-true}"
+
+        if forward_tag_known "$FORWARD_TAG"; then
+            echo -e "\n[冲突] 已存在 tag: ${FORWARD_TAG}"
+            echo " 1) 跳过"
+            echo " 2) 覆盖"
+            echo " 3) 自动改名"
+            read -r -p "选项 (默认: 1): " choice
+            case "${choice:-1}" in
+                2)
+                    remove_forward_config_by_tag "$FORWARD_TAG" || return 1
+                    state_delete_forward_rule "$FORWARD_TAG" || err "[状态] 覆盖导入时删除旧状态记录失败，将继续写入新记录。"
+                    ;;
+                3)
+                    new_tag="$(generate_unique_forward_tag_from_base "$FORWARD_TAG")" || return 1
+                    info "[导入] ${FORWARD_TAG} 已自动改名为 ${new_tag}"
+                    FORWARD_TAG="$new_tag"
+                    ;;
+                *)
+                    info "[跳过] ${tag}"
+                    continue
+                    ;;
+            esac
+        fi
+
+        write_forward_config_from_vars || return 1
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$FORWARD_TAG" "$FORWARD_LISTEN" "$FORWARD_LISTEN_PORT" "$FORWARD_TARGET" "$FORWARD_TARGET_PORT" "$FORWARD_NETWORK" "$FORWARD_MODE" "$FORWARD_REMARK" "$FORWARD_ENABLED" >>"$tmp_records"
+        ((imported += 1))
+    done
+
+    if ((imported == 0)); then
+        rm -f "$tmp_records"
+        info "[端口转发] 没有导入任何规则。"
+        return 0
+    fi
+
+    if ! apply_config "端口转发"; then
+        rm -f "$tmp_records"
+        err "[失败] [端口转发] 导入后应用配置失败。"
+        return 1
+    fi
+
+    while IFS=$'\t' read -r FORWARD_TAG FORWARD_LISTEN FORWARD_LISTEN_PORT FORWARD_TARGET FORWARD_TARGET_PORT FORWARD_NETWORK FORWARD_MODE FORWARD_REMARK FORWARD_ENABLED; do
+        state_sync_forward_rule || err "[状态] 转发状态记录失败，但 config.json 已生效。"
+    done <"$tmp_records"
+    rm -f "$tmp_records"
+
+    state_set_meta_action "导入端口转发" || err "[状态] 最近变更记录失败。"
+    ok "[完成] 已导入 ${imported} 条转发规则。"
+}
+
+configure_forward_menu() {
+    local choice
+
+    while true; do
+        echo -e "\n${YELLOW}[中转/端口转发管理]${PLAIN}"
+        echo " 1) 添加安全转发（默认，遵守安全规则）"
+        echo " 2) 添加专用中转（适合代理落地/内网服务）"
+        echo " 3) 查看转发规则"
+        echo " 4) 修改转发规则"
+        echo " 5) 启用/停用转发规则"
+        echo " 6) 删除转发规则"
+        echo " 7) 测试转发目标"
+        echo " 8) 导出/导入转发规则"
+        echo " 9) 返回主菜单"
+        read -r -p "选项 (默认: 9): " choice
+
+        case "${choice:-9}" in
+            1)
+                if ! { prepare_system && configure_forward_rule "safe" && install_forward_rule; }; then
+                    err "[失败] 添加安全转发未完成，请查看上方错误信息。"
+                fi
+                ;;
+            2)
+                if ! { prepare_system && configure_forward_rule "relay" && install_forward_rule; }; then
+                    err "[失败] 添加专用中转未完成，请查看上方错误信息。"
+                fi
+                ;;
+            3)
+                list_forward_rules
+                ;;
+            4)
+                if ! { prepare_system && edit_forward_rule; }; then
+                    err "[失败] 修改转发规则未完成，请查看上方错误信息。"
+                fi
+                ;;
+            5)
+                echo " 1) 启用转发规则"
+                echo " 2) 停用转发规则"
+                read -r -p "选项: " choice
+                case "$choice" in
+                    1) prepare_system && set_forward_enabled "true" ;;
+                    2) prepare_system && set_forward_enabled "false" ;;
+                    *) err "无效选项。" ;;
+                esac
+                ;;
+            6)
+                if ! { prepare_system && delete_forward_rule; }; then
+                    err "[失败] 删除端口转发未完成，请查看上方错误信息。"
+                fi
+                ;;
+            7)
+                test_forward_rule || err "[失败] 测试转发目标未完成，请查看上方错误信息。"
+                ;;
+            8)
+                echo " 1) 导出转发规则"
+                echo " 2) 导入转发规则"
+                read -r -p "选项: " choice
+                case "$choice" in
+                    1) export_forward_rules ;;
+                    2) prepare_system && import_forward_rules ;;
+                    *) err "无效选项。" ;;
+                esac
+                ;;
+            9)
+                return 0
+                ;;
+            *)
+                err "无效选项。"
+                ;;
+        esac
+
+        echo
+        read -r -p "按回车返回端口转发菜单..." || return 0
+    done
+}
+
 view_config() {
     local mode="${1:-$LINK_VIEW_MODE}"
     local detail="${2:-quick}"
@@ -1697,6 +2881,7 @@ view_config() {
     echo -e "默认私网规则: ${YELLOW}$(default_private_block_mode)${PLAIN}"
     echo -e "增强安全屏蔽: ${YELLOW}$(enhanced_safety_block_status)${PLAIN}"
     echo -e "中国大陆直连屏蔽: ${YELLOW}$(china_direct_block_status)${PLAIN}"
+    echo -e "端口转发: ${YELLOW}$(forward_rule_count) 条${PLAIN}"
     if [[ "$detail" == "doctor" ]]; then
         echo -e "geoip.dat: ${YELLOW}$(resource_file_status "$ASSET_DIR/geoip.dat")${PLAIN}"
         echo -e "geosite.dat: ${YELLOW}$(resource_file_status "$ASSET_DIR/geosite.dat")${PLAIN}"
@@ -1767,6 +2952,10 @@ view_config() {
         [[ -n "$IPV6_HOST" ]] && echo -e "IPv6链接: socks5://${su}:${sw}@${IPV6_HOST}:${sp}"
     fi
 
+    if [[ "$detail" == "doctor" ]]; then
+        list_forward_rules
+    fi
+
     show_footer
 }
 
@@ -1810,7 +2999,7 @@ reset_secrets() {
             current_method="$(jq -r --arg tag "$SS_TAG" '.inbounds[] | select(.tag == $tag).settings.method' "$CONFIG_FILE")"
             SS_PASSWORD="$(generate_ss2022_password "$current_method")"
             tmp="$(mktemp)"
-            jq --arg tag "$SS_TAG" --arg pass "$SS_PASSWORD" '(.inbounds[] | select(.tag == $tag).settings.password) = $pass' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+            jq --arg tag "$SS_TAG" --arg pass "$SS_PASSWORD" '(.inbounds[] | select(.tag == $tag).settings.password) = $pass' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"
             rm -f "$tmp"
             ok "[完成] SS2022 密码已重置。"
             changed="true"
@@ -1833,12 +3022,12 @@ reset_secrets() {
             generate_vless_encryption_pair "$VLESS_AUTH" || return 1
             tmp="$(mktemp)"
             jq --arg tag "$VLESS_TAG" \
-               --arg uuid "$VLESS_UUID" \
-               --arg decryption "$VLESS_DECRYPTION" '
+                --arg uuid "$VLESS_UUID" \
+                --arg decryption "$VLESS_DECRYPTION" '
                 (.inbounds[] | select(.tag == $tag).settings.clients[0].id) = $uuid |
                 (.inbounds[] | select(.tag == $tag).settings.decryption) = $decryption |
                 del(.inbounds[] | select(.tag == $tag).settings.clients[0].flow)
-               ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+               ' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"
             rm -f "$tmp"
             state_set_vless
             ok "[完成] VLESS UUID 与 Encryption 已重置。"
@@ -1852,7 +3041,7 @@ reset_secrets() {
         if jq -e --arg tag "$SOCKS_TAG" '.inbounds[]? | select(.tag == $tag)' "$CONFIG_FILE" >/dev/null 2>&1; then
             S_PASS="$(openssl rand -hex 8)"
             tmp="$(mktemp)"
-            jq --arg tag "$SOCKS_TAG" --arg pass "$S_PASS" '(.inbounds[] | select(.tag == $tag).settings.accounts[0].pass) = $pass' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+            jq --arg tag "$SOCKS_TAG" --arg pass "$S_PASS" '(.inbounds[] | select(.tag == $tag).settings.accounts[0].pass) = $pass' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"
             rm -f "$tmp"
             ok "[完成] SOCKS5 密码已重置。"
             changed="true"
@@ -1875,7 +3064,7 @@ remove_inbound() {
     local tmp
     init_config || return 1
     tmp="$(mktemp)"
-    jq --arg tag "$tag" '.inbounds = ((.inbounds // []) | map(select(.tag != $tag)))' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+    jq --arg tag "$tag" '.inbounds = ((.inbounds // []) | map(select(.tag != $tag)))' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"
     rm -f "$tmp"
 }
 
@@ -1884,7 +3073,7 @@ state_delete_key() {
     local tmp
     init_state
     tmp="$(mktemp)"
-    jq "del(.${key})" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+    jq "del(.${key})" "$STATE_FILE" >"$tmp" && mv "$tmp" "$STATE_FILE"
     rm -f "$tmp"
     ensure_config_security
 }
@@ -2015,7 +3204,8 @@ render_menu() {
     echo -e "${GREEN}10.${PLAIN} 开启/关闭中国大陆直连屏蔽"
     echo -e "${GREEN}11.${PLAIN} 开启/关闭增强安全屏蔽"
     echo -e "${GREEN}12.${PLAIN} 导出当前配置备份"
-    echo -e "${GREEN}13.${PLAIN} 退出"
+    echo -e "${GREEN}13.${PLAIN} 中转/端口转发管理"
+    echo -e "${GREEN}14.${PLAIN} 退出"
     echo -e "----------------------------------------------"
 }
 
@@ -2024,7 +3214,7 @@ show_menu() {
 
     while true; do
         render_menu
-        read -r -p "请输入选项 [1-13]: " MENU_CHOICE || exit 0
+        read -r -p "请输入选项 [1-14]: " MENU_CHOICE || exit 0
 
         case "$MENU_CHOICE" in
             1)
@@ -2082,7 +3272,10 @@ show_menu() {
             12)
                 export_current_config_backup || err "[失败] 导出当前配置备份未完成，请查看上方错误信息。"
                 ;;
-            13) exit 0 ;;
+            13)
+                configure_forward_menu || err "[失败] 中转/端口转发管理未完成，请查看上方错误信息。"
+                ;;
+            14) exit 0 ;;
             *) err "错误选项。" ;;
         esac
 
@@ -2099,7 +3292,7 @@ run_view_command() {
             doctor)
                 detail="doctor"
                 ;;
-            ipv4|ipv6|dual)
+            ipv4 | ipv6 | dual)
                 mode="$1"
                 ;;
             *)
@@ -2118,11 +3311,11 @@ run_cnblock_command() {
     local mode="${1:-}"
 
     case "$mode" in
-        ""|status)
+        "" | status)
             echo -e "中国大陆直连屏蔽: ${YELLOW}$(china_direct_block_status)${PLAIN}"
             echo "用法: ike cnblock basic|enhanced|off"
             ;;
-        basic|enhanced|off)
+        basic | enhanced | off)
             install_or_update_xray || {
                 err "[失败] Xray 安装/更新失败，无法修改中国大陆直连屏蔽。"
                 return 1
@@ -2162,13 +3355,83 @@ run_safety_command() {
             }
             set_enhanced_safety_block "false"
             ;;
-        ""|status)
+        "" | status)
             echo -e "增强安全屏蔽: ${YELLOW}$(enhanced_safety_block_status)${PLAIN}"
             echo "用法: ike safety enhanced on|off"
             ;;
         *)
             err "[失败] 未知 safety enhanced 参数: $action"
             echo "用法: ike safety enhanced on|off"
+            return 1
+            ;;
+    esac
+}
+
+run_forward_command() {
+    local action="${1:-}"
+    local mode="${2:-safe}"
+    local tag_arg="${2:-}"
+
+    case "$action" in
+        list | "")
+            list_forward_rules
+            ;;
+        add)
+            if ! validate_forward_mode "$mode"; then
+                err "[失败] 未知 forward add 模式: $mode"
+                echo "用法: ike forward add [safe|relay]"
+                return 1
+            fi
+            prepare_system || {
+                err "[失败] 系统准备失败，无法添加端口转发。"
+                return 1
+            }
+            configure_forward_rule "$mode" && install_forward_rule
+            ;;
+        enable)
+            prepare_system || {
+                err "[失败] 系统准备失败，无法启用端口转发。"
+                return 1
+            }
+            set_forward_enabled "true" "$tag_arg"
+            ;;
+        disable)
+            prepare_system || {
+                err "[失败] 系统准备失败，无法停用端口转发。"
+                return 1
+            }
+            set_forward_enabled "false" "$tag_arg"
+            ;;
+        edit)
+            prepare_system || {
+                err "[失败] 系统准备失败，无法修改端口转发。"
+                return 1
+            }
+            edit_forward_rule "$tag_arg"
+            ;;
+        test)
+            test_forward_rule "$tag_arg"
+            ;;
+        export)
+            export_forward_rules
+            ;;
+        import)
+            prepare_system || {
+                err "[失败] 系统准备失败，无法导入端口转发。"
+                return 1
+            }
+            import_forward_rules
+            ;;
+        del | delete | remove)
+            prepare_system || {
+                err "[失败] 系统准备失败，无法删除端口转发。"
+                return 1
+            }
+            delete_forward_rule "$tag_arg"
+            ;;
+        *)
+            err "[失败] 未知 forward 参数: $action"
+            echo "用法: ike forward list | ike forward add [safe|relay] | ike forward enable [tag] | ike forward disable [tag] | ike forward edit [tag] | ike forward test [tag] | ike forward export | ike forward import | ike forward del [tag]"
             return 1
             ;;
     esac
@@ -2196,10 +3459,15 @@ main() {
         safety)
             run_safety_command "${2:-}" "${3:-}"
             ;;
+        forward)
+            run_forward_command "${2:-}" "${3:-}"
+            ;;
         *)
             show_menu
             ;;
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

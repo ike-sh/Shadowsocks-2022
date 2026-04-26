@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  shell:
+    name: Shell checks and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash git jq shellcheck shfmt netcat-openbsd iproute2 procps
+
+      - name: Static checks
+        run: |
+          bash -n install.sh
+          shellcheck install.sh
+          shfmt -d -i 4 -ci install.sh
+          git diff --check -- install.sh README.md
+
+      - name: Forward unit tests
+        run: |
+          bash tests/test_forward.sh
