@@ -18,6 +18,7 @@
 - **VLESS Encryption**：调用 `xray vlessenc` 生成服务端 `decryption` 和客户端 `encryption`，支持基础模式和高级模式。
 - **可选 SOCKS5**：适合临时代理或内网测试。
 - **Tunnel 中转管理**：基于 Xray 官方 Tunnel（旧称 `dokodemo-door`）实现应用层 TCP/UDP 中转，支持 single、实验性 portMap、safe / relay、group 分组。
+- **Endpoint 管理**：可设置用户实际连接地址，适配 NAT、小鸡端口映射、DDNS 和多公网 IP 场景。
 - **菜单式维护**：支持安装/更新核心、安装协议、查看链接、切换链接显示模式、重置密钥、卸载和清理。
 - **默认安全屏蔽**：默认阻断 BT/PT、私网地址、SMTP、SMB/NetBIOS 等高风险目标。
 - **可选中国大陆直连屏蔽**：可在服务端通过 Xray routing 阻断发往 `geoip:cn` / `geosite:cn` 的流量。
@@ -77,6 +78,16 @@ ike help
 ike version
 ike update
 ike backup
+ike endpoint show
+ike endpoint set
+ike endpoint clear
+ike endpoint detect
+ike config path
+ike config test
+ike config edit
+ike service status
+ike service restart
+ike logs
 ike cnblock
 ike cnblock basic
 ike cnblock enhanced
@@ -99,6 +110,8 @@ ike tunnel template
 ike tunnel ports
 ike tunnel export
 ike tunnel import
+ike tunnel import /path/to/tunnels.json --yes
+ike tunnel bundle export
 ike tunnel del
 ```
 
@@ -226,6 +239,40 @@ bash tests/test_forward.sh
 ### SOCKS5
 
 SOCKS5 为可选入站，适合临时代理、内网访问或简单连通性测试。是否允许认证、监听地址和端口以脚本交互为准。
+
+## Endpoint 管理
+
+Endpoint 表示用户实际连接这个节点时应该使用的地址。普通公网 VPS 可以依赖自动探测；NAT 小鸡、DDNS、端口映射、负载均衡或多公网 IP 场景，建议手动设置。
+
+```bash
+ike endpoint detect
+ike endpoint set
+ike endpoint show
+ike endpoint clear
+```
+
+`ike endpoint detect` 会从多个来源探测公网地址：
+
+- `https://api.ipify.org`
+- `https://ipinfo.io/ip`
+- `https://ifconfig.me`
+- `https://icanhazip.com`
+- `https://ipecho.net/plain`
+
+`ike endpoint set` 会把自定义连接地址写入 `/etc/xray/installer-state.json`：
+
+```json
+{
+  "endpoint": {
+    "custom": "example.com",
+    "updated_at": "2026-04-27T00:00:00Z"
+  }
+}
+```
+
+可填写 `1.2.3.4`、`example.com` 或 `domain.com:外部端口`。如果 endpoint 已包含端口，Tunnel 列表会提示这是全局自定义地址，不会再盲目拼接本地监听端口；NAT 映射端口需要用户自行确认。
+
+Endpoint 不改变 SS2022、VLESS Encryption、SOCKS5 或 Tunnel 的配置生成逻辑，只用于 `ike view`、`ike tunnel list`、`ike tunnel doctor` 的连接入口提示。
 
 ## Tunnel 中转管理
 
@@ -360,6 +407,30 @@ ike tunnel del
 
 `ike tunnel import` 支持新 `tunnels[]` 格式，也兼容旧 `{ "forwards": [] }`。遇到 tag 冲突时可选择跳过、覆盖或自动改名；导入不会覆盖非 Tunnel 协议入站。
 
+非交互导入：
+
+```bash
+ike tunnel import /path/to/tunnels.json --yes
+```
+
+传入文件路径时不会再询问路径；加 `--yes` 时，遇到 tag 冲突默认自动改名，适合自动化部署。兼容别名 `ike forward import /path/to/tunnels.json --yes` 仍可使用。
+
+### Tunnel 部署包
+
+`ike tunnel bundle export` 会导出一个部署包目录：
+
+```text
+/root/xray-tunnel-bundle-YYYYmmddHHMMSS/
+```
+
+包含：
+
+- `tunnels.json`: 当前 Tunnel 规则，使用 `version/type/tunnels` 新格式。
+- `README.txt`: 在另一台机器导入的最小命令。
+- `install-tunnels.sh`: 可选辅助脚本，只负责下载/调用 Xray-OneClick 并导入 `tunnels.json`。
+
+部署包用于“落地机生成线路机导入配置”的轻量工作流，不会写死用户敏感信息到命令行，也不新增协议逻辑。
+
 ## 默认安全屏蔽
 
 脚本会默认写入一组服务端防滥用基线规则，适合大多数个人 VPS 场景。该规则不需要手动开启，新安装协议、更新核心、重置配置或应用 routing 设置时都会自动补齐。
@@ -450,6 +521,25 @@ ike view doctor
 ```
 
 状态文件不存在时会跳过状态备份，不影响配置备份导出。脚本内部应用配置前仍会保留 `config.json.bak.*` 备份；如果配置校验或服务重启失败，`apply_config()` 会尝试恢复最近一次内部备份并重新校验。
+
+## 配置、服务与日志
+
+常用直达命令：
+
+```bash
+ike config path
+ike config test
+ike config edit
+ike service status
+ike service restart
+ike logs
+```
+
+- `ike config path` 输出当前配置路径 `/etc/xray/config.json`。
+- `ike config test` 执行 `xray run -test -c /etc/xray/config.json`。
+- `ike config edit` 使用 `$EDITOR`、`nano` 或 `vi` 打开配置，保存后先校验，校验通过才询问是否重启。
+- `ike service status` / `ike service restart` 按当前 init system 调用 systemd 或 OpenRC。
+- `ike logs` 在 systemd 下调用 `journalctl -u xray -e --no-pager`；OpenRC 下尝试读取 `/var/log/xray/access.log` 和 `/var/log/xray/error.log`。
 
 ## 常用验证
 

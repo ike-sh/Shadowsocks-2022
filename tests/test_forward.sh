@@ -19,6 +19,8 @@ ensure_config_security() {
 }
 
 install_dependencies() { :; }
+install_shortcut() { :; }
+enable_bbr() { :; }
 create_service() { :; }
 restart_service() { :; }
 state_set_meta_action() { :; }
@@ -105,6 +107,8 @@ cleanup_fixture() {
     [[ -n "$TEST_TMP" && -d "$TEST_TMP" ]] && rm -rf "$TEST_TMP"
     TEST_TMP=""
     FORCE_PORTMAP_APPLY_FAIL="false"
+    ENDPOINT_AUTO_OVERRIDE=""
+    ENDPOINT_AUTO_CACHE=""
 }
 
 setup_fixture() {
@@ -116,6 +120,9 @@ setup_fixture() {
     ASSET_DIR="${TEST_TMP}/share"
     BIN_PATH="${TEST_TMP}/xray"
     FORWARD_EXPORT_DIR="$TEST_TMP"
+    TUNNEL_BUNDLE_EXPORT_DIR="$TEST_TMP"
+    ENDPOINT_AUTO_OVERRIDE="203.0.113.10"
+    ENDPOINT_AUTO_CACHE=""
     INIT_SYSTEM="test"
     OS_TYPE="test"
     ARCH="x86_64"
@@ -418,6 +425,44 @@ test_forward_ports_lists_managed_inbounds() {
     cleanup_fixture
 }
 
+test_endpoint_state_and_tunnel_connection_display() {
+    local output
+
+    setup_fixture
+    printf 'edge.example.com\n' | endpoint_set_command >/dev/null || fail "endpoint set failed"
+    assert_jq "$STATE_FILE" '.endpoint.custom == "edge.example.com" and (.endpoint.updated_at | type == "string")' "endpoint state not saved"
+
+    set_forward_vars "tunnel-30000-443" "0.0.0.0" "30000" "1.2.3.4" "443" "tcp" "safe" "endpoint-test" "true" "single" "edge"
+    write_forward_config_from_vars || fail "endpoint tunnel write failed"
+    state_sync_forward_rule || fail "endpoint tunnel state sync failed"
+
+    output="$(list_forward_rules)"
+    assert_output_contains "$output" "连接入口: edge.example.com:30000" "tunnel list did not show endpoint connection entry"
+    output="$(doctor_forward_rules "tunnel-30000-443")"
+    assert_output_contains "$output" "连接入口: edge.example.com:30000" "tunnel doctor did not show endpoint connection entry"
+    output="$(endpoint_show_command)"
+    assert_output_contains "$output" "edge.example.com" "endpoint show did not print custom endpoint"
+
+    endpoint_clear_command >/dev/null || fail "endpoint clear failed"
+    assert_jq "$STATE_FILE" '(.endpoint.custom // "") == ""' "endpoint clear did not remove custom endpoint"
+    cleanup_fixture
+}
+
+test_endpoint_with_port_not_blindly_appended() {
+    local output
+
+    setup_fixture
+    state_set_endpoint "edge.example.com:12345" || fail "endpoint with port set failed"
+    set_forward_vars "tunnel-30000-443" "0.0.0.0" "30000" "1.2.3.4" "443" "tcp" "safe" "endpoint-port-test" "true" "single" "edge"
+    write_forward_config_from_vars || fail "endpoint port tunnel write failed"
+    state_sync_forward_rule || fail "endpoint port state sync failed"
+
+    output="$(list_forward_rules)"
+    assert_output_contains "$output" "连接入口: edge.example.com:12345" "endpoint with port was not shown"
+    assert_output_contains "$output" "已含端口" "endpoint with port did not warn about NAT mapping"
+    cleanup_fixture
+}
+
 test_tunnel_group_list_and_export() {
     local output export_file candidate
 
@@ -468,6 +513,116 @@ JSON
     printf '%s\n' "$import_file" | import_forward_rules >/dev/null || fail "legacy forwards import failed"
     assert_jq "$CONFIG_FILE" 'any(.inbounds[]?; .tag == "forward-31000-8443" and .protocol == "dokodemo-door")' "legacy forward inbound missing"
     assert_jq "$STATE_FILE" 'any(.tunnels[]?; .tag == "forward-31000-8443" and .remark == "legacy")' "legacy forward was not mapped into tunnels state"
+    cleanup_fixture
+}
+
+test_tunnel_import_path_yes_conflict_rename() {
+    local import_file count renamed_tag
+
+    setup_fixture
+    set_forward_vars "tunnel-30000-443" "0.0.0.0" "30000" "1.2.3.4" "443" "tcp" "safe" "original" "true" "single" "edge"
+    write_forward_config_from_vars || fail "original tunnel write failed"
+    state_sync_forward_rule || fail "original tunnel state failed"
+
+    import_file="${TEST_TMP}/tunnels.json"
+    cat >"$import_file" <<'JSON'
+{
+  "version": 1,
+  "type": "xray-oneclick-tunnels",
+  "tunnels": [
+    {
+      "tag": "tunnel-30000-443",
+      "type": "single",
+      "group": "edge",
+      "listen": "0.0.0.0",
+      "listen_port": 30000,
+      "target": "9.9.9.9",
+      "target_port": 443,
+      "network": "tcp",
+      "mode": "safe",
+      "remark": "renamed",
+      "enabled": true
+    }
+  ]
+}
+JSON
+
+    run_tunnel_command import "$import_file" --yes >/dev/null || fail "non-interactive tunnel import failed"
+    count="$(jq '[.inbounds[]? | select((.tag // "") | startswith("tunnel-30000-443"))] | length' "$CONFIG_FILE")"
+    [[ "$count" == "2" ]] || fail "non-interactive import did not keep original and renamed tunnel"
+    renamed_tag="$(jq -r '.inbounds[]? | select((.tag // "") | startswith("tunnel-30000-443-")) | .tag' "$CONFIG_FILE" | head -n 1)"
+    [[ -n "$renamed_tag" ]] || fail "non-interactive import renamed tag missing"
+    assert_jq "$CONFIG_FILE" 'any(.inbounds[]?; .tag == "tunnel-30000-443" and .settings.address == "1.2.3.4")' "original tunnel overwritten by --yes import"
+    # shellcheck disable=SC2016
+    assert_jq_arg "$STATE_FILE" tag "$renamed_tag" 'any(.tunnels[]?; .tag == $tag and .target == "9.9.9.9")' "renamed tunnel state missing after --yes import"
+    cleanup_fixture
+}
+
+test_forward_import_alias_accepts_path_yes() {
+    local import_file output
+
+    setup_fixture
+    import_file="${TEST_TMP}/alias-tunnels.json"
+    cat >"$import_file" <<'JSON'
+{
+  "version": 1,
+  "type": "xray-oneclick-tunnels",
+  "tunnels": [
+    {
+      "tag": "tunnel-32000-443",
+      "type": "single",
+      "group": "alias",
+      "listen": "0.0.0.0",
+      "listen_port": 32000,
+      "target": "8.8.8.8",
+      "target_port": 443,
+      "network": "tcp",
+      "mode": "safe",
+      "remark": "alias",
+      "enabled": true
+    }
+  ]
+}
+JSON
+
+    run_forward_command import "$import_file" --yes >/dev/null || fail "forward import alias path --yes failed"
+    output="$(run_forward_command list)"
+    assert_output_contains "$output" "tunnel-32000-443" "forward alias did not import/list tunnel"
+    cleanup_fixture
+}
+
+test_tunnel_bundle_export() {
+    local bundle_dir
+
+    setup_fixture
+    set_forward_vars "tunnel-30000-443" "0.0.0.0" "30000" "1.2.3.4" "443" "tcp" "safe" "bundle-test" "true" "single" "edge"
+    write_forward_config_from_vars || fail "bundle tunnel write failed"
+    state_sync_forward_rule || fail "bundle tunnel state failed"
+
+    export_tunnel_bundle >/dev/null || fail "bundle export failed"
+    bundle_dir="$(find "$TEST_TMP" -maxdepth 1 -type d -name 'xray-tunnel-bundle-*' | head -n 1)"
+    [[ -d "$bundle_dir" ]] || fail "bundle directory missing"
+    [[ -f "$bundle_dir/tunnels.json" ]] || fail "bundle tunnels.json missing"
+    [[ -f "$bundle_dir/README.txt" ]] || fail "bundle README.txt missing"
+    [[ -x "$bundle_dir/install-tunnels.sh" ]] || fail "bundle install-tunnels.sh missing or not executable"
+    assert_jq "$bundle_dir/tunnels.json" '.version == 1 and .type == "xray-oneclick-tunnels" and any(.tunnels[]?; .tag == "tunnel-30000-443")' "bundle tunnels.json invalid"
+    assert_output_contains "$(cat "$bundle_dir/README.txt")" "ike tunnel import" "bundle README missing import instructions"
+    cleanup_fixture
+}
+
+test_config_service_logs_commands_in_test_env() {
+    local output
+
+    setup_fixture
+    output="$(run_config_command path)"
+    assert_output_contains "$output" "$CONFIG_FILE" "config path did not print config file"
+    run_config_command test >/dev/null || fail "config test failed in fixture"
+    if run_service_command status >/dev/null 2>&1; then
+        fail "service status unexpectedly succeeded in test init system"
+    fi
+    if run_logs_command >/dev/null 2>&1; then
+        fail "logs unexpectedly succeeded in test init system"
+    fi
     cleanup_fixture
 }
 
@@ -529,8 +684,14 @@ run_test test_forward_doctor_statuses
 run_test test_forward_doctor_detects_missing_relay_route
 run_test test_forward_template_imports
 run_test test_forward_ports_lists_managed_inbounds
+run_test test_endpoint_state_and_tunnel_connection_display
+run_test test_endpoint_with_port_not_blindly_appended
 run_test test_tunnel_group_list_and_export
 run_test test_old_forwards_import_compatibility
+run_test test_tunnel_import_path_yes_conflict_rename
+run_test test_forward_import_alias_accepts_path_yes
+run_test test_tunnel_bundle_export
+run_test test_config_service_logs_commands_in_test_env
 run_test test_portmap_fallback_to_single_tunnels
 run_test test_forward_alias_lists_tunnels
 

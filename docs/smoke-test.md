@@ -19,6 +19,10 @@ ike version
 ike help
 ike view
 ike view doctor
+ike endpoint detect
+ike endpoint set
+ike endpoint show
+ike endpoint clear
 xray run -test -c /etc/xray/config.json
 systemctl status xray --no-pager
 ```
@@ -78,6 +82,7 @@ ike tunnel group doctor
 ike tunnel template
 ike tunnel ports
 ike tunnel export
+ike tunnel bundle export
 ike tunnel import
 ike tunnel del
 xray run -test -c /etc/xray/config.json
@@ -101,7 +106,9 @@ xray run -test -c /etc/xray/config.json
 - `group list` / `group doctor` 能按 group 汇总。
 - `template` 生成 `/root/xray-tunnels-template.json`。
 - `export` 生成 `/root/xray-tunnels-YYYYmmddHHMMSS.json`，格式包含 `version`、`type`、`tunnels`。
+- `bundle export` 生成 `/root/xray-tunnel-bundle-YYYYmmddHHMMSS/`，包含 `tunnels.json`、`README.txt` 和可选辅助脚本。
 - `import` 兼容新 `tunnels[]` 和旧 `forwards[]`，不覆盖非 Tunnel 入站；tag 冲突时按选择处理。
+- 非交互导入可使用 `ike tunnel import /path/to/tunnels.json --yes`，冲突默认自动改名。
 - `del` 不误删 SS2022 / VLESS Encryption / SOCKS5。
 
 兼容入口也应可用：
@@ -110,6 +117,28 @@ xray run -test -c /etc/xray/config.json
 ike forward list
 ike forward doctor
 ```
+
+## 配置、服务与日志验证
+
+```bash
+ike config path
+ike config test
+ike service status
+ike logs
+```
+
+可选编辑验证：
+
+```bash
+EDITOR=vi ike config edit
+```
+
+预期结果：
+
+- `config path` 输出 `/etc/xray/config.json`。
+- `config test` 配置校验通过。
+- `service status` 能显示 systemd/openrc 状态。
+- `logs` 能显示最近 Xray 日志，或在对应日志不存在时给出明确提示。
 
 ## 安全规则验证
 
